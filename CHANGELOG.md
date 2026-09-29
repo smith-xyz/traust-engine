@@ -2,6 +2,17 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.19.0]
+
+## Changes
+
+- Import filesystem product/repo/ref relationships into the contracts 0.50.0 registry
+  before ingesting artifacts; bind repository IDs and commit SHAs to evidence.
+- Export ledger selections with product_repo IDs, or import them into a selected
+  ledger target after storage reconciliation (`ledger-migration` extra).
+- Pin traust-contracts 9e5e6605 and traust-ledger 5c326338; bootstrap fresh
+  storage with `Store.migrate()`.
+
 ## [0.18.2]
 
 ## Changes
