@@ -558,7 +558,16 @@ def render_threat_model(document: dict) -> str:
     lines += ["## 1. System context", "", context, ""]
 
     lines += ["## 2. Assets", ""]
-    lines += _tm_table(("asset", "description", "sensitivity"), document.get("assets") or [])
+    assets = document.get("assets") or []
+    # regulatory_scope and example_records are optional columns (schema.md
+    # section 2); written when any asset carries them, never dropped.
+    asset_columns = (
+        "asset",
+        "description",
+        "sensitivity",
+        *(c for c in ("regulatory_scope", "example_records") if any(a.get(c) for a in assets)),
+    )
+    lines += _tm_table(asset_columns, assets)
     lines += [""]
 
     lines += ["## 3. Entry points & trust boundaries", ""]
@@ -593,6 +602,16 @@ def render_threat_model(document: dict) -> str:
             lines.append(f"- {field}: unset")
     lines += [""]
 
+    # The update history belongs to section 7 (schema.md; the linter reads it
+    # from there). It was emitted at the end of the document, which only
+    # landed in section 7 while nothing followed it -- a rated model's
+    # section 11 now does.
+    history = document.get("update_history") or []
+    if history:
+        lines += ["### Update history", ""]
+        lines += _tm_table(("date", "changes", "reason"), history)
+        lines += [""]
+
     # Sections 8-10 are OPTIONAL. Present-but-empty is an error to the
     # linter, absent is not -- so a model with nothing to say omits them.
     mitigations = document.get("mitigations") or []
@@ -609,8 +628,10 @@ def render_threat_model(document: dict) -> str:
             if scenario.get("threat"):
                 heading += f" — {scenario['threat']}"
             lines += [heading, ""]
-            lines += [f"- {step}" for step in scenario.get("steps") or []]
-            lines += [""]
+            # schema.md section 9: a scenario is prose -- 3-5 sentences telling
+            # the attack as it unfolds -- so each step is a paragraph.
+            for step in scenario.get("steps") or []:
+                lines += [step, ""]
 
     boundaries = document.get("tenant_boundaries") or []
     if boundaries:
@@ -650,11 +671,5 @@ def render_threat_model(document: dict) -> str:
                 tuple(threat_rating.FACTOR_COLUMNS), threat_rating.factor_rows(rating)
             )
             lines += [""]
-
-    history = document.get("update_history") or []
-    if history:
-        lines += ["### Update history", ""]
-        lines += _tm_table(("date", "changes", "reason"), history)
-        lines += [""]
 
     return "\n".join(lines).rstrip() + "\n"
