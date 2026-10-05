@@ -35,21 +35,28 @@ Private Git (after tags are published):
 uv add "traust-engine @ git+ssh://git@<your-forge>/<namespace>/traust-engine.git@v0.1.0"
 ```
 
-With library dependencies pinned the same way:
+Consumers pin library dependencies by commit, not release tag — a tag
+needs a release cut first, a `rev` doesn't, which is what lets the
+dependency chain (contracts to ledger to engine to downstream) propagate
+PR-to-PR instead of waiting on a tag at every hop:
 
 ```toml
 [project]
 dependencies = [
-    "traust-engine>=0.12.1",
-    "traust-ledger>=0.19.4",
-    "traust-contracts>=1.0.0,<2",
+    "traust-engine",
+    "traust-ledger",
+    "traust-contracts",
 ]
 
 [tool.uv.sources]
-traust-engine = { git = "git@<your-forge>:<namespace>/traust-engine.git", tag = "v0.12.1" }
-traust-ledger = { git = "git@<your-forge>:<namespace>/traust-ledger.git", tag = "v0.20.0" }
-traust-contracts = { git = "git@<your-forge>:<namespace>/traust-contracts.git", tag = "v1.2.0" }
+traust-engine = { git = "git@<your-forge>:<namespace>/traust-engine.git", rev = "<commit-sha>" }
+traust-ledger = { git = "git@<your-forge>:<namespace>/traust-ledger.git", rev = "<commit-sha>" }
+traust-contracts = { git = "git@<your-forge>:<namespace>/traust-contracts.git", rev = "<commit-sha>" }
 ```
+
+Note `dependencies` carries bare names, no `>=` floor — the `rev` above is
+the floor now, and a duplicated semver constraint is a second number that
+can drift out of sync with it.
 
 Local mono-checkout (sibling repos):
 
