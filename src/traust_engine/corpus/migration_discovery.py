@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,14 @@ class MigrationOptions(BaseModel):
     exclude: list[str] = Field(default_factory=list)
     schemas: dict[str, str] = Field(default_factory=dict)
     bindings: dict[str, BindingOverride] = Field(default_factory=dict)
+    multi_ref_policy: str = "error"
+
+    @field_validator("multi_ref_policy")
+    @classmethod
+    def known_multi_ref_policy(cls, value: str) -> str:
+        if value not in {"error", "newest"}:
+            raise ValueError("multi_ref_policy must be error or newest")
+        return value
 
     @field_validator("exclude", "schemas", "bindings", mode="before")
     @classmethod
@@ -104,6 +113,10 @@ class ArtifactCatalog:
         self.repositories: dict[str, set[str]] = defaultdict(set)
         self.repo_urls: dict[str, set[str]] = defaultdict(set)
         self.repo_refs: dict[str, set[str]] = defaultdict(set)
+        self.audit_contexts: dict[str, list[tuple[str, str, str, datetime | None]]] = defaultdict(
+            list
+        )
+        self.context_selections: dict[str, dict[str, str]] = {}
         self.reference_names: dict[str, set[str]] = defaultdict(set)
         self._profiles = storage_profiles()
         self._routes = {name: name for name in self._profiles} | FILENAME_ALIASES
@@ -114,6 +127,8 @@ class ArtifactCatalog:
         self.repositories.clear()
         self.repo_urls.clear()
         self.repo_refs.clear()
+        self.audit_contexts.clear()
+        self.context_selections.clear()
 
     def is_candidate(self, relative: str) -> bool:
         stem = Path(relative).stem
@@ -219,6 +234,22 @@ class ArtifactCatalog:
                     declared = metadata.get("ref")
                     if isinstance(declared, str) and declared:
                         self.repo_refs[artifact.subject].add(declared)
+                        if not artifact.relative.endswith("-findings-current.json"):
+                            date = metadata.get("date")
+                            timestamp = None
+                            if isinstance(date, str):
+                                try:
+                                    timestamp = datetime.fromisoformat(date.replace("Z", "+00:00"))
+                                    timestamp = (
+                                        timestamp.replace(tzinfo=UTC)
+                                        if timestamp.tzinfo is None
+                                        else timestamp.astimezone(UTC)
+                                    )
+                                except ValueError:
+                                    timestamp = None
+                            self.audit_contexts[artifact.subject].append(
+                                (artifact.relative, key, declared, timestamp)
+                            )
 
     def source_subjects(self, reference: str, relative: str) -> set[str]:
         subjects: set[str] = set()
@@ -227,6 +258,27 @@ class ArtifactCatalog:
             if reference == path or reference.endswith("/" + path) or local == path:
                 subjects.update(self.references[path])
         return subjects
+
+    def newest_context(
+        self, candidates: set[str], repository: str
+    ) -> tuple[str, str, str, datetime | None]:
+        contexts = [
+            context
+            for subject in candidates
+            for context in self.audit_contexts[subject]
+            if context[1] == repository
+        ]
+        if not contexts or any(context[3] is None for context in contexts):
+            raise DiscoveryError(
+                "ambiguous_repository", "Newest context requires valid recorded audit dates"
+            )
+        newest = max(context[3] for context in contexts if context[3] is not None)
+        winners = [context for context in contexts if context[3] == newest]
+        if len({context[2] for context in winners}) != 1:
+            raise DiscoveryError(
+                "ambiguous_repository", "Newest audit dates tie across repository refs"
+            )
+        return min(winners, key=lambda context: context[0])
 
     def repository(
         self, artifact: Artifact, document: dict[str, Any], binding: Binding | None = None
@@ -269,9 +321,34 @@ class ArtifactCatalog:
         declared = metadata.get("ref") if isinstance(metadata, dict) else None
         inherited = set().union(*(self.repo_refs[name] for name in candidates))
         if len(inherited) > 1:
-            raise DiscoveryError(
-                "ambiguous_repository", "Multiple refs share this repository context"
-            )
+            if self.options.multi_ref_policy == "newest" and (declared or legacy_ref):
+                inherited = (
+                    {declared or legacy_ref} if (declared or legacy_ref) in inherited else inherited
+                )
+            if len(inherited) > 1 and self.options.multi_ref_policy == "newest":
+                if artifact.family in {
+                    "report",
+                    "triage",
+                    "layer",
+                    "cloud-config-audit",
+                    "cloud-config-findings-current",
+                }:
+                    raise DiscoveryError(
+                        "ambiguous_repository",
+                        "Historical artifacts require an exact ref or baseline binding",
+                    )
+                selected = self.newest_context(candidates, url)
+                inherited = {selected[2]}
+                self.context_selections[artifact.relative] = {
+                    "policy": "newest",
+                    "audit_source": selected[0],
+                    "ref": selected[2],
+                    "recorded_date": selected[3].isoformat(),
+                }
+            if len(inherited) > 1:
+                raise DiscoveryError(
+                    "ambiguous_repository", "Multiple refs share this repository context"
+                )
         inherited_ref = next(iter(inherited), None)
         if declared is not None and (not isinstance(declared, str) or not declared):
             raise DiscoveryError("ambiguous_repository", "Invalid declared repository ref")
@@ -290,7 +367,11 @@ class ArtifactCatalog:
                         raise DiscoveryError("ambiguous_binding", "Conflicting configured bindings")
                     overrides[key] = value
         required = self._profiles[artifact.family]["required"]
-        subject = overrides.get("subject_id", artifact.subject)
+        selected = self.context_selections.get(artifact.relative)
+        selected_subject = (
+            self.artifacts[selected["audit_source"]].subject if selected else artifact.subject
+        )
+        subject = overrides.get("subject_id", selected_subject)
         if artifact.family == "layer" and "layer_id" not in overrides:
             reference = document.get("metadata", {}).get("audit_report")
             if isinstance(reference, str):
