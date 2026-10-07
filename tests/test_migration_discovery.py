@@ -99,6 +99,48 @@ def test_unqualified_companion_rejects_multiple_audit_refs(tmp_path: Path) -> No
         c.repository(companion, {})
 
 
+def add_dated_audit(c: ArtifactCatalog, base: str, ref: str, date: str) -> None:
+    path = f"findings/acm/cli/{base}-security-audit.json"
+    artifact = c.identify(path, {})
+    c.add(
+        artifact, {"metadata": {"repository": "https://example.test/cli", "ref": ref, "date": date}}
+    )
+
+
+def test_newest_policy_routes_unqualified_companion_and_records_evidence(tmp_path: Path) -> None:
+    c = catalog(tmp_path, multi_ref_policy="newest")
+    add_dated_audit(c, "cli__release-1", "release-1", "2026-05-01")
+    add_dated_audit(c, "cli__release-2", "release-2", "2026-06-01T01:00:00Z")
+    companion = c.identify("findings/acm/cli/cli-priv-profile.json", {})
+    assert c.repository(companion, {}) == ("acm", "https://example.test/cli", "release-2")
+    assert c.binding(companion, {}).subject_id == "findings/acm/cli/cli__release-2"
+    assert c.context_selections[companion.relative]["audit_source"].endswith(
+        "cli__release-2-security-audit.json"
+    )
+
+
+@pytest.mark.parametrize("date", ["2026-05-01", "invalid"])
+def test_newest_policy_blocks_ties_or_missing_timestamp(tmp_path: Path, date: str) -> None:
+    c = catalog(tmp_path, multi_ref_policy="newest")
+    add_dated_audit(c, "cli__release-1", "release-1", "2026-05-01")
+    add_dated_audit(c, "cli__release-2", "release-2", date)
+    companion = c.identify("findings/acm/cli/cli-priv-profile.json", {})
+    with pytest.raises(DiscoveryError, match="dates"):
+        c.repository(companion, {})
+
+
+def test_explicit_branch_and_historical_baseline_are_not_reassigned(tmp_path: Path) -> None:
+    c = catalog(tmp_path, multi_ref_policy="newest")
+    add_dated_audit(c, "cli__release-1", "release-1", "2026-05-01")
+    add_dated_audit(c, "cli__release-2", "release-2", "2026-06-01")
+    companion = c.identify("findings/acm/cli/cli__release-1-priv-profile.json", {})
+    assert c.repository(companion, {})[-1] == "release-1"
+    assert companion.relative not in c.context_selections
+    layer = c.identify("findings/acm/cli/cli-findings-layer.json", {})
+    with pytest.raises(DiscoveryError, match="exact ref"):
+        c.repository(layer, {})
+
+
 def test_findings_without_repository_are_not_invented(tmp_path: Path) -> None:
     c = catalog(tmp_path)
     artifact = c.identify("findings/team/repo/repo-findings-layer.json", {})

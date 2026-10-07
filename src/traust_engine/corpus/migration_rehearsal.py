@@ -349,6 +349,10 @@ class Rehearsal:
                 document = parse_document(self.source_bytes(relative))
                 binding = self.catalog.binding(artifact, document)
                 repository = self.catalog.repository(artifact, document, binding)
+                if relative in self.catalog.context_selections:
+                    self.decisions[relative]["context_selection"] = self.catalog.context_selections[
+                        relative
+                    ]
                 if repository is None:
                     if self.decisions[relative]["namespace"] == "traust_ledger":
                         raise DiscoveryError(
@@ -514,6 +518,10 @@ def preview(
                     document = parse_document(payload)
                     binding = run.catalog.binding(artifact, document)
                     run.catalog.repository(artifact, document, binding)
+                    if artifact.relative in run.catalog.context_selections:
+                        run.decisions[artifact.relative]["context_selection"] = (
+                            run.catalog.context_selections[artifact.relative]
+                        )
                     if run.decisions[artifact.relative]["namespace"] == "traust_ledger":
                         run.claim_layer(artifact.relative, binding.layer_id)
                 except MigrationValidationError as error:

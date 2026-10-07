@@ -2,6 +2,16 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.19.1]
+
+## Changes
+
+- Add opt-in `migration.multi_ref_policy: newest` for unqualified companion
+  ownership. Rank recorded baseline audit dates, preserve explicit branches,
+  block cross-ref ties and missing dates, and record the selected audit/ref.
+- Do not reassign historical reports, triages or Ledger histories to a newer
+  branch without an exact baseline binding. Default ambiguity handling is unchanged.
+
 ## [0.19.0]
 
 ## Changes
