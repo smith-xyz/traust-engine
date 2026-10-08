@@ -195,8 +195,11 @@ class RehearsalDatabase:
         from psycopg import sql
 
         tables = self.conn.execute(
-            "SELECT table_name FROM information_schema.columns "
-            "WHERE table_schema='traust_storage' AND column_name='binding_id'"
+            "SELECT c.table_name FROM information_schema.columns c "
+            "JOIN information_schema.tables t ON t.table_schema=c.table_schema "
+            "AND t.table_name=c.table_name "
+            "WHERE c.table_schema='traust_storage' AND c.column_name='binding_id' "
+            "AND t.table_type='BASE TABLE'"
         ).fetchall()
         names = {name for (name,) in tables} | {"artifact_evidence"}
         return {

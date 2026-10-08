@@ -23,6 +23,7 @@ from traust_engine.corpus import (
     migration_discovery,
     migration_projection,
     migration_validation,
+    migration_workers,
     store_ingest,
 )
 from traust_engine.corpus.migration_database import (
@@ -42,7 +43,6 @@ from traust_engine.corpus.migration_validation import (
     MigrationValidationError,
     NumberRepresentationError,
     parse_document,
-    validate_artifact,
 )
 
 
@@ -69,6 +69,7 @@ def _contract_pins() -> dict[str, str]:
                 migration_discovery,
                 migration_projection,
                 migration_validation,
+                migration_workers,
                 store_ingest,
             )
         ),
@@ -138,6 +139,9 @@ class Rehearsal:
         self.expected_rows: Counter[str] = Counter()
         self.bindings: set[str] = set()
         self.digests: set[str] = set()
+        self.validated_sources: set[str] = set()
+        self.repository_registrations: dict[tuple[str, str, str], str] = {}
+        self.prepared_bindings: dict[str, Any] = {}
         self.blocking_issues = 0
         self.pins = _contract_pins() | {str(config): digest(config)}
         self.result: dict[str, Any] = {
@@ -320,26 +324,43 @@ class Rehearsal:
 
     def validate_sources(self) -> None:
         self.catalog.reset_index()
-        for artifact in self.catalog.artifacts.values():
-            relative = artifact.relative
-            if self.states[relative] != "pending":
-                continue
+        self.result["phase"] = "validation"
+        self.result["validation_workers"] = self.catalog.options.validation_workers
+        tasks = (
+            (
+                str(self.root / artifact.relative),
+                artifact.family,
+                self.sources[str(self.root / artifact.relative)],
+            )
+            for artifact in self.catalog.artifacts.values()
+            if self.states[artifact.relative] == "pending"
+        )
+        index = 0
+        for index, (task, failures) in enumerate(
+            migration_workers.validation_results(tasks, self.catalog.options.validation_workers), 1
+        ):
             self.check_budget()
-            path = self.root / relative
-            payload = self.source_bytes(relative)
-            try:
-                validate_artifact(path, artifact.family, collect_all=True, payload=payload)
-            except MigrationValidationError as error:
-                for failure in error.issues:
-                    detail = failure.to_dict()
-                    code = detail.pop("error_class")
-                    detail["source_file"] = relative
-                    self.issue(code, **detail)
+            relative = Path(task[0]).relative_to(self.root).as_posix()
+            artifact = self.catalog.artifacts[relative]
+            if failures:
+                for failure in failures:
+                    code = failure.pop("error_class")
+                    failure["source_file"] = relative
+                    self.issue(code, **failure)
                 self.states[relative] = "rejected"
-                continue
-            self.catalog.add(artifact, parse_document(payload))
+            else:
+                payload = self.source_bytes(relative)
+                self.catalog.add(artifact, parse_document(payload))
+                self.validated_sources.add(relative)
+            if index % 100 == 0:
+                self.result["validation_processed"] = index
+                self.checkpoint()
+        self.result["validation_processed"] = index if self.catalog.artifacts else 0
+        self.checkpoint()
 
     def register_repositories(self, database: RehearsalDatabase | SQLiteRehearsalDatabase) -> None:
+        self.result["phase"] = "registration"
+        processed = 0
         for artifact in self.catalog.artifacts.values():
             relative = artifact.relative
             if self.states[relative] != "pending":
@@ -353,20 +374,38 @@ class Rehearsal:
                     self.decisions[relative]["context_selection"] = self.catalog.context_selections[
                         relative
                     ]
+                self.prepared_bindings[relative] = self.catalog.binding(artifact, document)
+                metadata = document.get("metadata")
+                self.decisions[relative]["reported_commit"] = (
+                    metadata.get("commit") if isinstance(metadata, dict) else None
+                )
+                processed += 1
+                if processed % 100 == 0:
+                    self.result["registration_processed"] = processed
+                    self.result["registered_contexts"] = len(self.repository_registrations)
+                    self.checkpoint()
                 if repository is None:
                     if self.decisions[relative]["namespace"] == "traust_ledger":
                         raise DiscoveryError(
                             "unresolved_repository", "Ledger layer needs a product_repo"
                         )
                     continue
-                self.decisions[relative]["product_repo_id"] = database.register_repository(
-                    *repository
-                )
+                if repository not in self.repository_registrations:
+                    self.repository_registrations[repository] = database.register_repository(
+                        *repository
+                    )
+                self.decisions[relative]["product_repo_id"] = self.repository_registrations[
+                    repository
+                ]
             except DiscoveryError as error:
                 self.issue(error.code, source_file=relative, factual_message=str(error))
                 self.states[relative] = "blocked"
+        self.result["registration_processed"] = processed
+        self.result["registered_contexts"] = len(self.repository_registrations)
+        self.checkpoint()
 
     def ingest_artifacts(self, database: RehearsalDatabase | SQLiteRehearsalDatabase) -> None:
+        self.result["phase"] = "ingestion"
         for index, artifact in enumerate(self.catalog.artifacts.values()):
             if self.states[artifact.relative] != "pending":
                 continue
@@ -377,13 +416,10 @@ class Rehearsal:
             path = self.root / artifact.relative
             payload = self.source_bytes(artifact.relative)
             try:
-                validated = validate_artifact(
-                    path, artifact.family, collect_all=True, payload=payload
-                )
-                document = parse_document(payload)
-                binding = self.catalog.binding(artifact, document)
-                metadata = document.get("metadata")
-                commit = metadata.get("commit") if isinstance(metadata, dict) else None
+                if artifact.relative not in self.validated_sources:
+                    raise RuntimeError("Artifact did not complete validation")
+                binding = self.prepared_bindings[artifact.relative]
+                commit = self.decisions[artifact.relative].get("reported_commit")
                 if commit is not None and (not isinstance(commit, str) or not commit):
                     raise DiscoveryError("ambiguous_repository", "Invalid artifact commit")
                 binding = replace(
@@ -395,7 +431,7 @@ class Rehearsal:
                     self.claim_layer(artifact.relative, binding.layer_id)
                     self.states[artifact.relative] = "delegated"
                     continue
-                saved = database.ingest(artifact.family, validated.payload, binding)
+                saved = database.ingest(artifact.family, payload, binding)
             except MigrationValidationError as error:
                 for failure in error.issues:
                     detail = failure.to_dict()
@@ -433,7 +469,7 @@ class Rehearsal:
                 )
                 self.states[artifact.relative] = "blocked"
                 continue
-            if digest(path) != validated.digest:
+            if digest(path) != self.sources[str(path)]:
                 raise RuntimeError("Source changed during ingestion")
             if saved.binding_id not in self.bindings:
                 self.expected_rows.update(database.projection_counts)
@@ -508,13 +544,15 @@ def preview(
         (output / "issues.jsonl").touch(exist_ok=False)
         try:
             run.inventory()
+            run.validate_sources()
             for artifact in run.catalog.artifacts.values():
+                if run.states[artifact.relative] != "pending":
+                    continue
                 path = results / artifact.relative
                 payload = path.read_bytes()
                 if hashlib.sha256(payload).hexdigest() != run.sources[str(path)]:
                     raise RuntimeError("Source changed after inventory")
                 try:
-                    validate_artifact(path, artifact.family, collect_all=True, payload=payload)
                     document = parse_document(payload)
                     binding = run.catalog.binding(artifact, document)
                     run.catalog.repository(artifact, document, binding)

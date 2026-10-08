@@ -2,6 +2,17 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.19.2]
+
+## Changes
+
+- Add bounded, opt-in spawned validation processes while retaining deterministic
+  decisions and ordered single-connection database writes.
+- Index directory ownership, cache exact repository registrations and prepared
+  bindings, and avoid repeating schema validation for hash-verified bytes.
+- Expose validation/registration phase progress and exclude derived PostgreSQL
+  views from physical projection counts during final reconciliation.
+
 ## [0.19.1]
 
 ## Changes

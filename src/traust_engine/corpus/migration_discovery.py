@@ -48,6 +48,7 @@ class MigrationOptions(BaseModel):
     schemas: dict[str, str] = Field(default_factory=dict)
     bindings: dict[str, BindingOverride] = Field(default_factory=dict)
     multi_ref_policy: str = "error"
+    validation_workers: int = Field(default=1, ge=1, le=8, strict=True)
 
     @field_validator("multi_ref_policy")
     @classmethod
@@ -112,6 +113,7 @@ class ArtifactCatalog:
         self.references: dict[str, set[str]] = defaultdict(set)
         self.repositories: dict[str, set[str]] = defaultdict(set)
         self.repo_urls: dict[str, set[str]] = defaultdict(set)
+        self.directory_subjects: dict[str, set[str]] = defaultdict(set)
         self.repo_refs: dict[str, set[str]] = defaultdict(set)
         self.audit_contexts: dict[str, list[tuple[str, str, str, datetime | None]]] = defaultdict(
             list
@@ -126,6 +128,7 @@ class ArtifactCatalog:
         self.reference_names.clear()
         self.repositories.clear()
         self.repo_urls.clear()
+        self.directory_subjects.clear()
         self.repo_refs.clear()
         self.audit_contexts.clear()
         self.context_selections.clear()
@@ -231,6 +234,9 @@ class ArtifactCatalog:
                 if key:
                     self.repositories[key].add(artifact.subject)
                     self.repo_urls[artifact.subject].add(key)
+                    self.directory_subjects[str(Path(artifact.subject).parent)].add(
+                        artifact.subject
+                    )
                     declared = metadata.get("ref")
                     if isinstance(declared, str) and declared:
                         self.repo_refs[artifact.subject].add(declared)
@@ -296,7 +302,7 @@ class ArtifactCatalog:
         candidates = {owner}
         if not known:
             parent = Path(owner).parent
-            candidates = {name for name in self.repo_urls if Path(name).parent == parent}
+            candidates = self.directory_subjects.get(str(parent), set())
             known = set().union(*(self.repo_urls[name] for name in candidates))
         if direct and known and direct not in known:
             raise DiscoveryError(
