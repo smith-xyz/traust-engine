@@ -1,0 +1,102 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sci-native-projection-review
+spec:
+  suspend: true
+  backoffLimit: 0
+  activeDeadlineSeconds: 21600
+  template:
+    metadata:
+      labels:
+        purpose: sci-native-projection-review
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: adapter
+          image: APPROVED_MIGRATION_IMAGE_BY_DIGEST
+          command:
+            - python3
+            - /adapter/project_native.py
+            - --source
+            - /corpus
+            - --native-output
+            - /evidence/native-run
+            - --target
+            - /approval/target.json
+            - --report
+            - /reports/approved-run
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: '2'
+              memory: 2Gi
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef: {name: sci-database, key: db.host}
+            - name: DB_PORT
+              valueFrom:
+                secretKeyRef: {name: sci-database, key: db.port}
+            - name: DB_NAME
+              valueFrom:
+                secretKeyRef: {name: sci-database, key: db.name}
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef: {name: sci-database, key: db.user}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: sci-database, key: db.password}
+            - name: MINIO_BUCKET_REPORTS
+              valueFrom:
+                secretKeyRef: {name: sci-object-store, key: bucket}
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: sci-object-store, key: aws_access_key_id}
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef: {name: sci-object-store, key: aws_secret_access_key}
+            - name: MINIO_USE_SSL
+              value: 'true'
+            - name: RDS_CA_FILE
+              value: /ca/ca.pem
+            - name: PYTHONDONTWRITEBYTECODE
+              value: '1'
+          volumeMounts:
+            - {name: corpus, mountPath: /corpus, readOnly: true}
+            - {name: evidence, mountPath: /evidence, readOnly: true}
+            - {name: reports, mountPath: /reports}
+            - {name: approval, mountPath: /approval, readOnly: true}
+            - {name: ca, mountPath: /ca, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: corpus
+          persistentVolumeClaim: {claimName: APPROVED_CORPUS_PVC, readOnly: true}
+        - name: evidence
+          persistentVolumeClaim: {claimName: APPROVED_EVIDENCE_PVC, readOnly: true}
+        - name: reports
+          persistentVolumeClaim: {claimName: APPROVED_REPORT_PVC}
+        - name: approval
+          configMap: {name: APPROVED_TARGET_CONFIGMAP}
+        - name: ca
+          secret:
+            secretName: sci-database
+            items: [{key: db.ca_cert, path: ca.pem}]
+        - name: tmp
+          emptyDir: {sizeLimit: 512Mi}
