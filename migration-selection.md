@@ -1,4 +1,14 @@
-# Opt-in newest multi-ref context
+# Migration selection and throughput options
+
+## Bounded validation workers
+
+Set `migration.validation_workers: 2` for a Job with two available CPUs; default is 1 and the maximum is 8. Validation runs in spawned worker processes (not Python threads), since schema work is CPU-bound. At most twice the worker count is in flight; each worker reads one source and returns only validation issues, never whole report bodies. Results and issue numbering are committed in original source order. Database connections, registration and writes are not shared with workers.
+
+Repository registration is cached per exact product/repo/ref; rejected registrations are not cached. Directory ownership and prepared bindings avoid repeated corpus-wide resolution. Accepted source bytes are still hash-checked before registration, ingestion and final reconciliation; the schema pass is not repeated for unchanged bytes. Checkpoints include phase, validation progress and unique registered-context counts.
+
+Start with two workers and measure memory/CPU/I/O. More workers can increase per-process validator memory and filesystem contention. This does not parallelize PostgreSQL writes, alter quarantine/selection policies, or guarantee a fixed full-corpus speedup.
+
+## Opt-in newest multi-ref context
 
 In the deployment corpus configuration (the file passed with `--config`), set:
 
