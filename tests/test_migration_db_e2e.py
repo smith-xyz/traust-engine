@@ -117,6 +117,46 @@ def test_registers_filesystem_repository_before_artifacts_and_exports_ledger(
     )
 
 
+def test_registry_strategy_reuses_product_and_repo_keys(tmp_path: Path) -> None:
+    from traust_engine.corpus.migration_database import MigrationTarget
+
+    target = MigrationTarget.sqlite(tmp_path / "registry.sqlite")
+    try:
+        target.initialize()
+        first = target.register_repository("acm", "https://example.test/cli", "")
+        branch = target.register_repository("acm", "https://example.test/cli", "release-2")
+        target.register_repository("other", "https://example.test/cli", "")
+        assert first != branch
+        assert len(target.products) == 2
+        assert len(target.repos) == 1
+    finally:
+        target.close()
+
+
+def test_reuses_registered_repository_within_one_import(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from traust_engine.corpus.migration_database import MigrationTarget
+
+    root, config, output = setup(tmp_path)
+    put(root, "team/a-findings-layer.json", layer())
+    put(root, "team/b-findings-layer.json", layer())
+    original = MigrationTarget.register_repository
+    calls = 0
+
+    def register(database: MigrationTarget, slug: str, url: str, ref: str) -> str:
+        nonlocal calls
+        calls += 1
+        return original(database, slug, url, ref)
+
+    monkeypatch.setattr(MigrationTarget, "register_repository", register)
+    result = migration.rehearse(
+        root, config, str(tmp_path / "storage.sqlite"), output, database_type="sqlite"
+    )
+    assert result["status"] == "passed", (output / "issues.jsonl").read_text()
+    assert calls == 1
+
+
 def test_audit_binding_uses_registered_repo_and_commit(tmp_path: Path) -> None:
     from test_migration_validation import report
 

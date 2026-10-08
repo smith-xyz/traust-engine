@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import math
 import os
@@ -10,12 +11,13 @@ import sqlite3
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
-from dataclasses import replace
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
 from traust_contracts.paths import schema_dir, storage_dir
-from traust_contracts.v1.storage import IngestError
+from traust_contracts.v1.storage import Binding, IngestError
 from traust_contracts.v1.storage import store as contracts_store
 
 from traust_engine.corpus import (
@@ -27,23 +29,49 @@ from traust_engine.corpus import (
     store_ingest,
 )
 from traust_engine.corpus.migration_database import (
-    RehearsalDatabase,
-    SQLiteRehearsalDatabase,
+    ImportStrategy,
+    MigrationTarget,
     acquire_run_lock,
     save_decisions,
     save_result,
 )
 from traust_engine.corpus.migration_discovery import (
+    Artifact,
     ArtifactCatalog,
     DiscoveryError,
     MigrationOptions,
     load_config,
 )
 from traust_engine.corpus.migration_validation import (
-    MigrationValidationError,
     NumberRepresentationError,
     parse_document,
 )
+
+
+@dataclass(slots=True)
+class SourceDecision:
+    source_file: str
+    reason: str | None = None
+    source_digest: str | None = None
+    digest_status: str | None = None
+    artifact: str | None = None
+    namespace: str | None = None
+    layer_id: str | None = None
+    product_repo_id: str | None = None
+    context_selection: dict[str, str] | None = None
+
+    def receipt(self, state: str) -> dict[str, Any]:
+        fields = asdict(self)
+        return {
+            **{key: value for key, value in fields.items() if value is not None or key == "reason"},
+            "decision": state,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ImportPlan:
+    binding: Binding
+    repository: tuple[str, str, str] | None
 
 
 def digest(path: Path) -> str:
@@ -62,7 +90,7 @@ def _contract_pins() -> dict[str, str]:
         storage_dir() / "profiles.json",
         Path(__file__),
         *(
-            Path(module.__file__)
+            Path(inspect.getfile(module))
             for module in (
                 contracts_store,
                 migration_database,
@@ -121,9 +149,12 @@ class Rehearsal:
     ) -> None:
         self.root, self.config_path, self.output = root, config, output
         self.route_layers_to_ledger = route_layers_to_ledger
-        self.decisions: dict[str, dict[str, Any]] = {}
+        self.decisions: dict[str, SourceDecision] = {}
         self.layer_ids: dict[str, str] = {}
         self.deadline = time.monotonic() + max_seconds if max_seconds is not None else None
+        self.started_at = time.perf_counter()
+        self.active_phase: tuple[str, float] | None = None
+        self.phase_seconds: dict[str, float] = {}
         corpus, options = load_config(config)
         if exclude:
             # Profile/CLI excludes add to the deployment config's migration.exclude.
@@ -136,12 +167,7 @@ class Rehearsal:
         self.errors: Counter[str] = Counter()
         self.exclusions: Counter[str] = Counter()
         self.reserved: Counter[str] = Counter()
-        self.expected_rows: Counter[str] = Counter()
-        self.bindings: set[str] = set()
-        self.digests: set[str] = set()
-        self.validated_sources: set[str] = set()
-        self.repository_registrations: dict[tuple[str, str, str], str] = {}
-        self.prepared_bindings: dict[str, Any] = {}
+        self.plans: dict[str, ImportPlan] = {}
         self.blocking_issues = 0
         self.pins = _contract_pins() | {str(config): digest(config)}
         self.result: dict[str, Any] = {
@@ -161,13 +187,25 @@ class Rehearsal:
         if self.deadline is not None and time.monotonic() >= self.deadline:
             raise TimeoutError("Rehearsal time budget exhausted")
 
+    @contextmanager
+    def phase(self, name: str) -> Iterator[None]:
+        started = time.perf_counter()
+        self.active_phase = (name, started)
+        try:
+            yield
+        finally:
+            self.phase_seconds[name] = round(time.perf_counter() - started, 3)
+            self.active_phase = None
+            self.checkpoint()
+
     def checkpoint(self) -> None:
+        now = time.perf_counter()
         ledger = self.result.get("ledger")
         if not ledger or ledger["status"] == "not_run":
             ledger = {
                 "status": "not_run",
                 "selected": sum(
-                    item.get("namespace") == "traust_ledger"
+                    item.namespace == "traust_ledger"
                     and self.states.get(relative) in {"selected", "delegated"}
                     for relative, item in self.decisions.items()
                 ),
@@ -180,15 +218,29 @@ class Rehearsal:
             excluded_by_rule=dict(self.exclusions),
             reserved_directories=dict(self.reserved),
             ledger=ledger,
+            timing={
+                "elapsed_seconds": round(now - self.started_at, 3),
+                "phase_seconds": dict(self.phase_seconds),
+                "active_phase": self.active_phase[0] if self.active_phase else None,
+                "active_seconds": round(now - self.active_phase[1], 3)
+                if self.active_phase
+                else None,
+            },
         )
         save_result(self.output, self.result)
+
+    def receipts(self) -> list[dict[str, Any]]:
+        return [
+            self.decisions[relative].receipt(self.states[relative])
+            for relative in sorted(self.states)
+        ]
 
     def issue(self, code: str, *, blocking: bool = True, **detail: Any) -> None:
         self.errors[code] += 1
         self.blocking_issues += int(blocking)
         source_file = detail.get("source_file")
         if isinstance(source_file, str) and source_file in self.decisions:
-            self.decisions[source_file]["reason"] = code
+            self.decisions[source_file].reason = code
         entry = {
             **detail,
             "id": f"ISSUE-{sum(self.errors.values()):06d}",
@@ -224,24 +276,26 @@ class Rehearsal:
             self.check_budget()
             relative = path.relative_to(self.root).as_posix()
             candidate = self.catalog.is_candidate(relative)
-            decision = "navigation_alias" if path.is_symlink() else None
-            rule = self.catalog.options.exclusion(relative)
-            self.decisions[relative] = {"source_file": relative, "reason": decision or rule}
-            if not candidate and not decision and not rule:
-                self.decisions[relative]["reason"] = "no_filename_route"
+            exclusion = (
+                "navigation_alias"
+                if path.is_symlink()
+                else self.catalog.options.exclusion(relative)
+            )
+            self.decisions[relative] = SourceDecision(relative, exclusion)
+            if not candidate and not exclusion:
+                self.decisions[relative].reason = "no_filename_route"
                 self.states[relative] = "unselected"
                 continue
-            if decision or rule:
+            if exclusion:
                 if (
                     not path.is_symlink()
                     and path.is_file()
                     and path.resolve().is_relative_to(self.root)
                 ):
                     try:
-                        self.decisions[relative]["source_digest"] = digest(path)
+                        self.decisions[relative].source_digest = digest(path)
                     except OSError:
-                        self.decisions[relative]["digest_status"] = "unavailable"
-                exclusion = decision or rule
+                        self.decisions[relative].digest_status = "unavailable"
                 self.exclusions[exclusion] += 1
                 self.states[relative] = "excluded"
                 continue
@@ -264,12 +318,12 @@ class Rehearsal:
             try:
                 payload = path.read_bytes()
                 self.sources[str(path)] = hashlib.sha256(payload).hexdigest()
-                self.decisions[relative]["source_digest"] = self.sources[str(path)]
+                self.decisions[relative].source_digest = self.sources[str(path)]
                 document = parse_document(payload)
                 artifact = self.catalog.identify(relative, document)
                 self.catalog.add(artifact, document)
-                self.decisions[relative]["artifact"] = artifact.family
-                self.decisions[relative]["namespace"] = (
+                self.decisions[relative].artifact = artifact.family
+                self.decisions[relative].namespace = (
                     "traust_ledger"
                     if artifact.family == "layer" and self.route_layers_to_ledger
                     else "traust_storage"
@@ -308,7 +362,7 @@ class Rehearsal:
         if not layer_id or (layer_id in self.layer_ids and self.layer_ids[layer_id] != relative):
             raise DiscoveryError("ambiguous_binding", "Ledger layer ID is absent or duplicated")
         self.layer_ids[layer_id] = relative
-        self.decisions[relative]["layer_id"] = layer_id
+        self.decisions[relative].layer_id = layer_id
 
     def source_bytes(self, relative: str) -> bytes:
         path = self.root / relative
@@ -317,207 +371,137 @@ class Rehearsal:
             raise RuntimeError("Source changed after inventory")
         return payload
 
-    def load(self, database: RehearsalDatabase | SQLiteRehearsalDatabase) -> None:
-        self.validate_sources()
-        self.register_repositories(database)
-        self.ingest_artifacts(database)
+    def pending(self) -> Iterator[Artifact]:
+        return (a for a in self.catalog.artifacts.values() if self.states[a.relative] == "pending")
+
+    def load(self, database: ImportStrategy) -> None:
+        with self.phase("validate"):
+            self.validate_sources()
+            self.resolve_sources()
+        with self.phase("registry"):
+            self.register_repositories(database)
+        _check_pins(self.pins)
+        with self.phase("ingest"):
+            self.ingest_artifacts(database)
 
     def validate_sources(self) -> None:
         self.catalog.reset_index()
-        self.result["phase"] = "validation"
-        self.result["validation_workers"] = self.catalog.options.validation_workers
+        workers = self.catalog.options.validation_workers
+        self.result["validation_workers"] = workers
         tasks = (
-            (
-                str(self.root / artifact.relative),
-                artifact.family,
-                self.sources[str(self.root / artifact.relative)],
-            )
-            for artifact in self.catalog.artifacts.values()
-            if self.states[artifact.relative] == "pending"
+            (str(self.root / a.relative), a.family, self.sources[str(self.root / a.relative)])
+            for a in self.pending()
         )
-        index = 0
-        for index, (task, failures) in enumerate(
-            migration_workers.validation_results(tasks, self.catalog.options.validation_workers), 1
-        ):
-            self.check_budget()
-            relative = Path(task[0]).relative_to(self.root).as_posix()
-            artifact = self.catalog.artifacts[relative]
-            if failures:
-                for failure in failures:
-                    code = failure.pop("error_class")
-                    failure["source_file"] = relative
-                    self.issue(code, **failure)
-                self.states[relative] = "rejected"
-            else:
-                payload = self.source_bytes(relative)
-                self.catalog.add(artifact, parse_document(payload))
-                self.validated_sources.add(relative)
-            if index % 100 == 0:
-                self.result["validation_processed"] = index
-                self.checkpoint()
-        self.result["validation_processed"] = index if self.catalog.artifacts else 0
-        self.checkpoint()
-
-    def register_repositories(self, database: RehearsalDatabase | SQLiteRehearsalDatabase) -> None:
-        self.result["phase"] = "registration"
         processed = 0
-        for artifact in self.catalog.artifacts.values():
-            relative = artifact.relative
-            if self.states[relative] != "pending":
-                continue
+        for (name, _, _), failures in migration_workers.validation_results(tasks, workers):
             self.check_budget()
+            relative = Path(name).relative_to(self.root).as_posix()
+            if failures:
+                for detail in failures:
+                    code = detail.pop("error_class")
+                    self.issue(code, **(detail | {"source_file": relative}))
+                self.states[relative] = "rejected"
+                continue
+            self.catalog.add(
+                self.catalog.artifacts[relative], parse_document(self.source_bytes(relative))
+            )
+            processed += 1
+            if processed % 500 == 0:
+                self.result["validation_processed"] = processed
+                self.checkpoint()
+        self.result["validation_processed"] = processed
+
+    def resolve_sources(self) -> None:
+        """Bind every valid artifact to its context and product/repo without touching a database."""
+        for artifact in self.pending():
+            relative = artifact.relative
+            decision = self.decisions[relative]
             try:
                 document = parse_document(self.source_bytes(relative))
                 binding = self.catalog.binding(artifact, document)
                 repository = self.catalog.repository(artifact, document, binding)
-                if relative in self.catalog.context_selections:
-                    self.decisions[relative]["context_selection"] = self.catalog.context_selections[
-                        relative
-                    ]
-                self.prepared_bindings[relative] = self.catalog.binding(artifact, document)
-                metadata = document.get("metadata")
-                self.decisions[relative]["reported_commit"] = (
-                    metadata.get("commit") if isinstance(metadata, dict) else None
-                )
-                processed += 1
-                if processed % 100 == 0:
-                    self.result["registration_processed"] = processed
-                    self.result["registered_contexts"] = len(self.repository_registrations)
-                    self.checkpoint()
-                if repository is None:
-                    if self.decisions[relative]["namespace"] == "traust_ledger":
-                        raise DiscoveryError(
-                            "unresolved_repository", "Ledger layer needs a product_repo"
-                        )
-                    continue
-                if repository not in self.repository_registrations:
-                    self.repository_registrations[repository] = database.register_repository(
-                        *repository
+                decision.context_selection = self.catalog.context_selections.get(relative)
+                if repository is None and decision.namespace == "traust_ledger":
+                    raise DiscoveryError(
+                        "unresolved_repository", "Ledger layer needs a product_repo"
                     )
-                self.decisions[relative]["product_repo_id"] = self.repository_registrations[
-                    repository
-                ]
+                metadata = document.get("metadata")
+                commit = metadata.get("commit") if isinstance(metadata, dict) else None
+                if commit is not None and (not isinstance(commit, str) or not commit):
+                    raise DiscoveryError("ambiguous_repository", "Invalid artifact commit")
+                if decision.namespace == "traust_ledger":
+                    self.claim_layer(relative, binding.layer_id)
+                self.plans[relative] = ImportPlan(replace(binding, commit_sha=commit), repository)
             except DiscoveryError as error:
                 self.issue(error.code, source_file=relative, factual_message=str(error))
                 self.states[relative] = "blocked"
-        self.result["registration_processed"] = processed
-        self.result["registered_contexts"] = len(self.repository_registrations)
-        self.checkpoint()
 
-    def ingest_artifacts(self, database: RehearsalDatabase | SQLiteRehearsalDatabase) -> None:
-        self.result["phase"] = "ingestion"
-        for index, artifact in enumerate(self.catalog.artifacts.values()):
-            if self.states[artifact.relative] != "pending":
+    def register_repositories(self, database: ImportStrategy) -> None:
+        registered: dict[tuple[str, str, str], str] = {}
+        for artifact in self.pending():
+            plan = self.plans[artifact.relative]
+            if plan.repository is None:
                 continue
+            if plan.repository not in registered:
+                self.check_budget()
+                registered[plan.repository] = database.register_repository(*plan.repository)
+            product_repo_id = registered[plan.repository]
+            self.result["registered_contexts"] = len(registered)
+            self.decisions[artifact.relative].product_repo_id = product_repo_id
+            self.plans[artifact.relative] = replace(
+                plan, binding=replace(plan.binding, product_repo_id=product_repo_id)
+            )
+
+    def ingest_artifacts(self, database: ImportStrategy) -> None:
+        for index, artifact in enumerate(self.pending()):
             self.check_budget()
-            if index % 100 == 0:
-                _check_pins(self.pins)
+            if index % 500 == 0:
                 self.checkpoint()
-            path = self.root / artifact.relative
-            payload = self.source_bytes(artifact.relative)
+            relative = artifact.relative
+            if self.decisions[relative].namespace == "traust_ledger":
+                self.states[relative] = "delegated"
+                continue
             try:
-                if artifact.relative not in self.validated_sources:
-                    raise RuntimeError("Artifact did not complete validation")
-                binding = self.prepared_bindings[artifact.relative]
-                commit = self.decisions[artifact.relative].get("reported_commit")
-                if commit is not None and (not isinstance(commit, str) or not commit):
-                    raise DiscoveryError("ambiguous_repository", "Invalid artifact commit")
-                binding = replace(
-                    binding,
-                    product_repo_id=self.decisions[artifact.relative].get("product_repo_id"),
-                    commit_sha=commit,
+                saved = database.ingest(
+                    artifact.family, self.source_bytes(relative), self.plans[relative].binding
                 )
-                if self.decisions[artifact.relative]["namespace"] == "traust_ledger":
-                    self.claim_layer(artifact.relative, binding.layer_id)
-                    self.states[artifact.relative] = "delegated"
-                    continue
-                saved = database.ingest(artifact.family, payload, binding)
-            except MigrationValidationError as error:
-                for failure in error.issues:
-                    detail = failure.to_dict()
-                    code = detail.pop("error_class")
-                    detail["source_file"] = artifact.relative
-                    self.issue(code, **detail)
-                self.states[artifact.relative] = "rejected"
-                continue
-            except DiscoveryError as error:
-                self.issue(
-                    error.code,
-                    source_file=artifact.relative,
-                    artifact=artifact.family,
-                    factual_message=str(error),
-                )
-                self.states[artifact.relative] = "blocked"
-                continue
             except IngestError as error:
                 database.check_healthy()
                 self.issue(
                     "ingest_rejected",
-                    source_file=artifact.relative,
+                    source_file=relative,
                     artifact=artifact.family,
                     factual_message=str(error),
                 )
-                self.states[artifact.relative] = "rejected"
+                self.states[relative] = "rejected"
                 continue
             except (KeyError, TypeError, ValueError) as error:
                 database.check_healthy()
                 self.issue(
                     "mapping_failure",
-                    source_file=artifact.relative,
+                    source_file=relative,
                     artifact=artifact.family,
                     exception_type=type(error).__name__,
                 )
-                self.states[artifact.relative] = "blocked"
+                self.states[relative] = "blocked"
                 continue
-            if digest(path) != self.sources[str(path)]:
-                raise RuntimeError("Source changed during ingestion")
-            if saved.binding_id not in self.bindings:
-                self.expected_rows.update(database.projection_counts)
-            self.bindings.add(saved.binding_id)
-            self.digests.add(saved.digest)
-            self.states[artifact.relative] = "already_bound" if saved.already_bound else "ingested"
+            self.states[relative] = "already_bound" if saved.already_bound else "ingested"
 
-    def reconcile(self, database: RehearsalDatabase | SQLiteRehearsalDatabase) -> None:
+    def reconcile(self, database: ImportStrategy) -> None:
         if set(self.states) != {p.relative_to(self.root).as_posix() for p in self.paths()}:
             raise RuntimeError("Source inventory changed during rehearsal")
         _check_pins(self.sources)
         _check_pins(self.pins)
-        actual = database.counts()
-        expected = dict(self.expected_rows) | {
-            "artifact_evidence": len(self.digests),
-            "artifact_binding": len(self.bindings),
-        }
-        if any(
-            actual.get(table, 0) != expected.get(table, 0)
-            for table in actual.keys() | expected.keys()
-        ):
-            raise RuntimeError("Target row counts differ from verified artifact projections")
+        expected, actual = database.reconcile()
         passed = self.blocking_issues == 0 and all(
             state in {"ingested", "already_bound", "excluded", "unselected", "delegated"}
             for state in self.states.values()
         )
         self.result["reconciliation"] = {
             "passed": passed,
-            "source_unchanged": True
-            if all(
-                str(self.root / relative) in self.sources
-                for relative, state in self.states.items()
-                if state not in {"excluded", "unselected"}
-            )
-            else None,
+            "source_unchanged": True,
             "loaded_artifacts_verified": True,
-            "checks": list(
-                getattr(
-                    database,
-                    "checks",
-                    (
-                        "evidence_pointer",
-                        "binding_context",
-                        "projection_values_and_multiplicity",
-                        "row_counts",
-                    ),
-                )
-            ),
+            "checks": list(database.checks),
             "expected_rows": expected,
             "actual_rows": actual,
         }
@@ -545,35 +529,9 @@ def preview(
         try:
             run.inventory()
             run.validate_sources()
-            for artifact in run.catalog.artifacts.values():
-                if run.states[artifact.relative] != "pending":
-                    continue
-                path = results / artifact.relative
-                payload = path.read_bytes()
-                if hashlib.sha256(payload).hexdigest() != run.sources[str(path)]:
-                    raise RuntimeError("Source changed after inventory")
-                try:
-                    document = parse_document(payload)
-                    binding = run.catalog.binding(artifact, document)
-                    run.catalog.repository(artifact, document, binding)
-                    if artifact.relative in run.catalog.context_selections:
-                        run.decisions[artifact.relative]["context_selection"] = (
-                            run.catalog.context_selections[artifact.relative]
-                        )
-                    if run.decisions[artifact.relative]["namespace"] == "traust_ledger":
-                        run.claim_layer(artifact.relative, binding.layer_id)
-                except MigrationValidationError as error:
-                    for failure in error.issues:
-                        detail = failure.to_dict()
-                        code = detail.pop("error_class")
-                        detail["source_file"] = artifact.relative
-                        run.issue(code, **detail)
-                    run.states[artifact.relative] = "rejected"
-                except DiscoveryError as error:
-                    run.issue(error.code, source_file=artifact.relative, factual_message=str(error))
-                    run.states[artifact.relative] = "blocked"
-                else:
-                    run.states[artifact.relative] = "selected"
+            run.resolve_sources()
+            for artifact in run.pending():
+                run.states[artifact.relative] = "selected"
             if set(run.states) != {p.relative_to(results).as_posix() for p in run.paths()}:
                 raise RuntimeError("Source inventory changed during preview")
             _check_pins(run.sources)
@@ -584,13 +542,7 @@ def preview(
             run.result.update(status="blocked", diagnostics_complete=False)
         finally:
             run.result.update(run_state="finished", database_retained=False)
-            save_decisions(
-                output,
-                [
-                    {**run.decisions[relative], "decision": state}
-                    for relative, state in sorted(run.states.items())
-                ],
-            )
+            save_decisions(output, run.receipts())
             run.checkpoint()
     return run.result
 
@@ -603,7 +555,7 @@ def rehearse(
     *,
     findings_db: Path | None = None,
     max_seconds: float | None = None,
-    database_factory: Callable[[str], RehearsalDatabase] = RehearsalDatabase,
+    database_factory: Callable[[str], ImportStrategy] = MigrationTarget.postgres,
     route_layers_to_ledger: bool = False,
     database_type: Literal["postgres", "sqlite"] = "postgres",
     exclude: list[str] | None = None,
@@ -631,20 +583,23 @@ def rehearse(
         database = None
         run.checkpoint()
         try:
-            run.inventory()
+            with run.phase("inventory"):
+                run.inventory()
             run.check_budget()
             database = (
-                SQLiteRehearsalDatabase(Path(dsn))
+                MigrationTarget.sqlite(Path(dsn))
                 if database_type == "sqlite"
                 else database_factory(dsn)
             )
             run.result.update(database=database.name, database_retained=True)
             run.checkpoint()
-            database.initialize()
+            with run.phase("bootstrap"):
+                database.initialize()
             if database_type == "sqlite":
                 run.result["views"] = "installed; dashboard compatibility not verified"
             run.load(database)
-            run.reconcile(database)
+            with run.phase("reconcile"):
+                run.reconcile(database)
             run.checkpoint()
             run.check_budget()
             if ledger_target_url and run.result["reconciliation"]["passed"]:
@@ -653,13 +608,7 @@ def rehearse(
                     migrate,
                 )
 
-                save_decisions(
-                    output,
-                    [
-                        {**run.decisions[relative], "decision": state}
-                        for relative, state in sorted(run.states.items())
-                    ],
-                )
+                save_decisions(output, run.receipts())
                 selected = run.result["ledger"]["selected"]
                 if selected:
                     counts: Counter[str] = Counter()
@@ -699,6 +648,7 @@ def rehearse(
                 "systemic_failure",
                 exception_type=type(error).__name__,
                 sqlstate=getattr(error, "sqlstate", None),
+                detail=str(error)[:500],
                 factual_message="Run stopped; database retained, no source changes authorized",
             )
             run.result.update(status="blocked", diagnostics_complete=False)
@@ -720,12 +670,6 @@ def rehearse(
                 )
             )
             run.result["run_state"] = "finished"
-            save_decisions(
-                output,
-                [
-                    {**run.decisions[relative], "decision": state}
-                    for relative, state in sorted(run.states.items())
-                ],
-            )
+            save_decisions(output, run.receipts())
             run.checkpoint()
         return run.result

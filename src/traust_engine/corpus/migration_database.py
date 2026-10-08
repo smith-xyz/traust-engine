@@ -6,16 +6,17 @@ import hashlib
 import json
 import os
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, Protocol
 
-from traust_contracts.v1.storage import Binding, Store
+from traust_contracts.v1.storage import Binding, IngestResult
 
-from traust_engine.corpus.migration_projection import VerifiedSQLiteStore, VerifiedStore
+from traust_engine.corpus.migration_projection import Expectations, RecordingStore
 
 BUNDLE = ("migration-result.json", "issues.jsonl", "decisions.jsonl")
+CHECKS = ("evidence_pointer", "binding_context", "projection_values_and_multiplicity", "row_counts")
 
 
 class TargetNotEmpty(ValueError):
@@ -24,6 +25,18 @@ class TargetNotEmpty(ValueError):
 
 class TargetInUse(ValueError):
     pass
+
+
+class ImportStrategy(Protocol):
+    name: str
+    checks: tuple[str, ...]
+
+    def initialize(self) -> None: ...
+    def register_repository(self, slug: str, url: str, ref: str) -> str: ...
+    def ingest(self, artifact: str, payload: bytes, binding: Binding) -> IngestResult: ...
+    def check_healthy(self) -> None: ...
+    def reconcile(self) -> tuple[dict[str, int], dict[str, int]]: ...
+    def close(self) -> None: ...
 
 
 def save_result(output: Path, result: dict[str, Any]) -> None:
@@ -55,159 +68,133 @@ def acquire_run_lock(output: Path) -> Generator[None, None, None]:
         os.close(descriptor)
 
 
-class SQLiteRehearsalDatabase:
-    """Create a fresh SQLite artifact target without modifying an existing database."""
+class MigrationTarget:
+    """A fresh SQLite file or empty PostgreSQL database, written only through contracts."""
 
-    checks = (
-        "evidence_pointer",
-        "binding_context",
-        "projection_values_and_multiplicity",
-        "row_counts",
-    )
+    checks: tuple[str, ...] = CHECKS
 
-    def __init__(self, path: Path) -> None:
-        self.path = path.resolve()
-        with self.path.open("xb"):
+    def __init__(self, conn: Any, dialect: Literal["sqlite", "postgres"], name: str) -> None:
+        self.conn, self.dialect, self.name = conn, dialect, name
+        self.store = RecordingStore(conn)
+        self.expected = Expectations(set(), booleans_as_int=dialect == "sqlite")
+        self.products: dict[str, str] = {}
+        self.repos: dict[str, str] = {}
+        self.product_repos: dict[tuple[str, str, str], str] = {}
+
+    @classmethod
+    def sqlite(cls, path: Path) -> MigrationTarget:
+        path = path.resolve()
+        with path.open("xb"):
             pass
-        self.conn = sqlite3.connect(self.path, isolation_level=None)
-        self.name = str(self.path)
-        self.store = VerifiedSQLiteStore(self.conn)
-        self.last_binding = ""
+        return cls(sqlite3.connect(path, isolation_level=None), "sqlite", str(path))
+
+    @classmethod
+    def postgres(cls, dsn: str) -> MigrationTarget:
+        import psycopg
+
+        conn = psycopg.connect(dsn, autocommit=True, connect_timeout=5)
+        return cls(conn, "postgres", conn.info.dbname)
+
+    def table(self, name: str) -> str:
+        return f'traust_storage."{name}"' if self.dialect == "postgres" else f'"{name}"'
 
     def initialize(self) -> None:
+        if self.dialect == "postgres":
+            if not self.conn.execute(
+                "SELECT pg_try_advisory_lock(hashtext('traust:artifact-migration'))"
+            ).fetchone()[0]:
+                raise TargetInUse("Another migration is using this database")
+            if self.conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n "
+                "ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%' "
+                "AND n.nspname <> 'information_schema' AND c.relkind IN ('r','p','v','m','S','f'))"
+            ).fetchone()[0]:
+                raise TargetNotEmpty(
+                    "Target must be an empty dedicated database; nothing was reset"
+                )
         self.store.migrate()
+        if self.dialect == "postgres":
+            self.expected.json_columns = set(
+                self.conn.execute(
+                    "SELECT table_name, column_name FROM information_schema.columns "
+                    "WHERE table_schema='traust_storage' AND data_type IN ('json','jsonb')"
+                ).fetchall()
+            )
 
     def register_repository(self, slug: str, url: str, ref: str) -> str:
-        product_id = self.store.register_product(slug)
-        repo_id = self.store.register_repo(url)
-        return self.store.register_product_repo(product_id, repo_id, ref)
+        if (slug, url, ref) not in self.product_repos:
+            if slug not in self.products:
+                self.products[slug] = self.store.register_product(slug)
+            if url not in self.repos:
+                self.repos[url] = self.store.register_repo(url)
+            self.product_repos[slug, url, ref] = self.store.register_product_repo(
+                self.products[slug], self.repos[url], ref
+            )
+        return self.product_repos[slug, url, ref]
 
-    def ingest(self, artifact: str, payload: bytes, binding: Binding) -> Any:
+    def ingest(self, artifact: str, payload: bytes, binding: Binding) -> IngestResult:
         saved = self.store.ingest(artifact, payload, binding)
         if saved.digest != hashlib.sha256(payload).hexdigest():
             raise RuntimeError("Stored evidence digest differs from original bytes")
-        pointer = self.conn.execute(
-            "SELECT byte_size FROM artifact_evidence WHERE digest=?", (saved.digest,)
-        ).fetchone()
-        if pointer is None or pointer[0] != len(payload):
-            raise RuntimeError("Stored evidence pointer differs from original bytes")
-        record = self.store.get_binding(saved.binding_id)
-        if record.artifact_digest != saved.digest or record.artifact_name != artifact:
-            raise RuntimeError("Stored artifact binding differs from declared context")
-        if record.binding != binding:
-            raise RuntimeError("Stored binding differs from declared context")
-        self.last_binding = saved.binding_id
-        return saved
-
-    @property
-    def projection_counts(self) -> dict[str, int]:
-        return self.store.last_counts
-
-    def check_healthy(self) -> None:
-        if self.conn.in_transaction:
-            raise RuntimeError("Database transaction was not rolled back")
-        self.conn.execute("SELECT 1")
-
-    def counts(self) -> dict[str, int]:
-        tables = [
-            row[0]
-            for row in self.conn.execute("SELECT name FROM sqlite_schema WHERE type='table'")
-            if not row[0].startswith("sqlite_")
-        ]
-        return {
-            table: self.conn.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
-            for table in tables
-            if table == "artifact_evidence"
-            or any(
-                row[1] == "binding_id" for row in self.conn.execute(f'PRAGMA table_info("{table}")')
+        if not saved.already_bound:
+            self.expected.add(
+                saved.binding_id,
+                saved.digest,
+                artifact,
+                len(payload),
+                binding,
+                self.store.projected,
             )
-        }
-
-    def close(self) -> None:
-        self.conn.close()
-
-
-class RehearsalDatabase:
-    def __init__(self, dsn: str) -> None:
-        import psycopg
-
-        self.conn = psycopg.connect(dsn, autocommit=True, connect_timeout=5)
-        self.name = self.conn.info.dbname
-        self.store: VerifiedStore | None = None
-
-    def initialize(self) -> None:
-        locked = self.conn.execute(
-            "SELECT pg_try_advisory_lock(hashtext('traust:artifact-migration'))"
-        ).fetchone()[0]
-        if not locked:
-            raise TargetInUse("Another migration is using this database")
-        occupied = self.conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname NOT LIKE 'pg_%' AND n.nspname <> 'information_schema' "
-            "AND c.relkind IN ('r','p','v','m','S','f'))"
-        ).fetchone()[0]
-        if occupied:
-            raise TargetNotEmpty("Target must be an empty dedicated database; nothing was reset")
-        Store(self.conn).migrate()
-        self.store = VerifiedStore(self.conn)
-
-    def register_repository(self, slug: str, url: str, ref: str) -> str:
-        assert self.store is not None
-        product_id = self.store.register_product(slug)
-        repo_id = self.store.register_repo(url)
-        return self.store.register_product_repo(product_id, repo_id, ref)
-
-    def ingest(self, artifact: str, payload: bytes, binding: Binding) -> Any:
-        assert self.store is not None
-        saved = self.store.ingest(artifact, payload, binding)
-        with self.conn.transaction():
-            if saved.digest != hashlib.sha256(payload).hexdigest():
-                raise RuntimeError("Stored evidence digest differs from original bytes")
-            pointer = self.conn.execute(
-                "SELECT byte_size FROM traust_storage.artifact_evidence WHERE digest=%s",
-                (saved.digest,),
-            ).fetchone()
-            if pointer is None or pointer[0] != len(payload):
-                raise RuntimeError("Stored evidence pointer differs from original bytes")
-            row = self.store._binding_row(saved.binding_id)
-            if row is None:
-                raise RuntimeError("Stored artifact binding is missing")
-            record = self.store._binding_record(saved.binding_id, row)
-            if (
-                record.artifact_digest != saved.digest
-                or record.artifact_name != artifact
-                or record.binding != binding
-            ):
-                raise RuntimeError("Stored artifact binding differs from declared context")
         return saved
 
-    @property
-    def projection_counts(self) -> dict[str, int]:
-        assert self.store is not None
-        return self.store.last_counts
-
     def check_healthy(self) -> None:
-        if self.conn.closed or self.conn.info.transaction_status != 0:
+        idle = (
+            not self.conn.in_transaction
+            if self.dialect == "sqlite"
+            else not self.conn.closed and self.conn.info.transaction_status == 0
+        )
+        if not idle:
             raise RuntimeError("Database unavailable or record rollback failed")
         self.conn.execute("SELECT 1")
 
-    def counts(self) -> dict[str, int]:
-        from psycopg import sql
+    def select(self, sql: str) -> Iterator[tuple[Any, ...]]:
+        if self.dialect == "sqlite":
+            yield from self.conn.execute(sql)
+            return
+        with self.conn.transaction(), self.conn.cursor(name="migration_verify") as cursor:
+            cursor.execute(sql)
+            yield from cursor
 
-        tables = self.conn.execute(
-            "SELECT c.table_name FROM information_schema.columns c "
-            "JOIN information_schema.tables t ON t.table_schema=c.table_schema "
-            "AND t.table_name=c.table_name "
-            "WHERE c.table_schema='traust_storage' AND c.column_name='binding_id' "
-            "AND t.table_type='BASE TABLE'"
-        ).fetchall()
-        names = {name for (name,) in tables} | {"artifact_evidence"}
+    def counts(self) -> dict[str, int]:
+        if self.dialect == "sqlite":
+            names = {
+                table
+                for (table,) in self.conn.execute(
+                    "SELECT m.name FROM sqlite_schema m JOIN pragma_table_info(m.name) c "
+                    "WHERE m.type='table' AND c.name='binding_id'"
+                )
+            }
+        else:
+            names = {
+                table
+                for (table,) in self.conn.execute(
+                    "SELECT c.table_name FROM information_schema.columns c "
+                    "JOIN information_schema.tables t USING (table_schema, table_name) "
+                    "WHERE c.table_schema='traust_storage' AND c.column_name='binding_id' "
+                    "AND t.table_type='BASE TABLE'"
+                )
+            }
         return {
-            name: self.conn.execute(
-                sql.SQL("SELECT count(*) FROM traust_storage.{}").format(sql.Identifier(name))
-            ).fetchone()[0]
-            for name in sorted(names)
+            name: self.conn.execute(f"SELECT count(*) FROM {self.table(name)}").fetchone()[0]
+            for name in sorted(names | {"artifact_evidence"})
         }
+
+    def reconcile(self) -> tuple[dict[str, int], dict[str, int]]:
+        expected, actual = self.expected.counts(), self.counts()
+        if any(actual.get(t, 0) != expected.get(t, 0) for t in actual.keys() | expected.keys()):
+            raise RuntimeError("Target row counts differ from verified artifact projections")
+        self.expected.verify(self.select, self.table)
+        return expected, actual
 
     def close(self) -> None:
         self.conn.close()

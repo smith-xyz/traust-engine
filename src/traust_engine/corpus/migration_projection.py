@@ -1,26 +1,23 @@
-"""Verify stored projection values before the contracts transaction commits."""
+"""Record the rows contracts writes and verify them against the target in one pass."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections import Counter, defaultdict
-from collections.abc import Hashable, Mapping
+from collections.abc import Hashable, Iterable, Mapping
 from decimal import Decimal
 from typing import Any
 
-from traust_contracts.v1.storage import Store
-from traust_contracts.v1.storage.store import SQLValue, storage_profiles
+from traust_contracts.v1.storage import Binding, Store
+from traust_contracts.v1.storage.store import SQLValue
 
 INSERT = re.compile(r"INSERT INTO (?:traust_storage\.)?(\w+)\s*\((.*?)\)\s*VALUES", re.S)
-# Families whose projection writes a parent row plus child rows in a second table.
-# The `layer` family projects directly into layer_event (its profile projection),
-# so it needs no child entry here.
-CHILD_TABLES = {
-    "report": "report_finding",
-    "validation": "validation_finding",
-    "cloud-config-findings-current": "cloud_config_finding",
-}
+BINDING_COLUMNS = (
+    "binding_id, artifact_digest, artifact_name, scope_id, subject_id, run_id, layer_id, "
+    "supersedes_binding_id, bound_at, artifact_role, product_repo_id, commit_sha"
+)
 
 
 class ProjectionMismatch(ValueError):
@@ -40,129 +37,108 @@ def _row_key(value: Any) -> Hashable:
     return type(value).__name__, value
 
 
-class ProjectionCapture(Store):
-    """Reuse contracts' mapping without executing its writes or duplicating its rules."""
+def _fingerprint(row: Mapping[str, Any]) -> bytes:
+    return hashlib.blake2b(repr(_row_key(dict(row))).encode(), digest_size=16).digest()
+
+
+class RecordingStore(Store):  # type: ignore[misc]  # traust-contracts ships no py.typed
+    """Contracts' store that keeps each projection row it inserted, and refuses dropped rows."""
 
     def __init__(self, conn: Any) -> None:
         super().__init__(conn)
-        self.rows: dict[str, list[dict[str, SQLValue]]] = defaultdict(list)
+        self.projected: list[tuple[str, dict[str, SQLValue]]] = []
+        self._recording = False
 
     def _execute(self, sql: str, values: Mapping[str, SQLValue] | None = None) -> Any:
-        match = INSERT.match(sql.strip())
-        if match and values is not None:
-            columns = {column.strip() for column in match[2].split(",")}
-            if columns != set(values):
+        cursor = super()._execute(sql, values)
+        if self._recording and values is not None and (match := INSERT.match(sql.strip())):
+            if {column.strip() for column in match[2].split(",")} != set(values):
                 raise ProjectionMismatch("Unsupported projection column mapping")
-            self.rows[match[1]].append(dict(values))
-            return None
-        if sql.lstrip().upper().startswith("SELECT"):
-            return super()._execute(sql, values)
-        raise ProjectionMismatch("Unsupported projection statement")
-
-
-class VerifiedSQLiteStore(Store):
-    """Check SQLite's inserted projection before the contract store commits."""
-
-    def __init__(self, conn: Any) -> None:
-        super().__init__(conn)
-        self.last_counts: dict[str, int] = {}
+            if cursor.rowcount != 1:
+                raise ProjectionMismatch(f"Projection row was not stored in {match[1]}")
+            self.projected.append((match[1], dict(values)))
+        return cursor
 
     def _project(
         self, artifact: str, document: dict[str, Any], digest: str, binding_id_value: str
     ) -> None:
-        super()._project(artifact, document, digest, binding_id_value)
-        capture = ProjectionCapture(self.conn)
-        capture._project(artifact, document, digest, binding_id_value)
-        tables = {storage_profiles()[artifact]["projection"], *capture.rows}
-        if child := CHILD_TABLES.get(artifact):
-            tables.add(child)
-        counts: dict[str, int] = {}
-        for table in sorted(tables):
-            expected = capture.rows[table]
-            if not expected:
-                count = self.conn.execute(
-                    f'SELECT count(*) FROM "{table}" WHERE binding_id=?', (binding_id_value,)
-                ).fetchone()[0]
-                if count:
-                    raise ProjectionMismatch("Unexpected projection rows")
-                counts[table] = 0
-                continue
-            columns = sorted(expected[0])
+        self.projected.clear()
+        self._recording = True
+        try:
+            super()._project(artifact, document, digest, binding_id_value)
+        finally:
+            self._recording = False
+
+
+class Expectations:
+    """What the target must hold after the import: evidence, bindings, and projection rows."""
+
+    def __init__(self, json_columns: set[tuple[str, str]], booleans_as_int: bool) -> None:
+        self.json_columns = json_columns
+        self.booleans_as_int = booleans_as_int
+        self.evidence: dict[str, int] = {}
+        self.bindings: dict[str, tuple[str, str, Binding]] = {}
+        self.columns: dict[str, tuple[str, ...]] = {}
+        self.rows: dict[str, Counter[tuple[str, bytes]]] = defaultdict(Counter)
+
+    def add(
+        self,
+        binding_id: str,
+        digest: str,
+        artifact: str,
+        size: int,
+        binding: Binding,
+        rows: Iterable[tuple[str, dict[str, SQLValue]]],
+    ) -> None:
+        self.evidence[digest] = size
+        self.bindings[binding_id] = (digest, artifact, binding)
+        for table, row in rows:
+            columns = self.columns.setdefault(table, tuple(sorted(row)))
+            if columns != tuple(sorted(row)):
+                raise ProjectionMismatch(f"Inconsistent projection columns in {table}")
+            self.rows[table][binding_id, _fingerprint(self._normalize(table, row))] += 1
+
+    def _normalize(self, table: str, row: dict[str, SQLValue]) -> dict[str, Any]:
+        return {
+            key: json.loads(value)
+            if isinstance(value, str) and (table, key) in self.json_columns
+            else int(value)
+            if self.booleans_as_int and isinstance(value, bool)
+            else value
+            for key, value in row.items()
+        }
+
+    def counts(self) -> dict[str, int]:
+        return {
+            "artifact_evidence": len(self.evidence),
+            "artifact_binding": len(self.bindings),
+            **{table: sum(rows.values()) for table, rows in self.rows.items()},
+        }
+
+    def verify(self, select: Any, table: Any) -> None:
+        """Stream each table once; ``select(sql)`` yields rows, ``table(name)`` quotes a name."""
+        evidence = dict(select(f"SELECT digest, byte_size FROM {table('artifact_evidence')}"))
+        if evidence != self.evidence:
+            raise ProjectionMismatch("Stored evidence pointers differ from original bytes")
+        stored = (
+            Store._binding_record(row[0], tuple(row[1:]))
+            for row in select(f"SELECT {BINDING_COLUMNS} FROM {table('artifact_binding')}")
+        )
+        if {
+            record.binding_id: (record.artifact_digest, record.artifact_name, record.binding)
+            for record in stored
+        } != self.bindings:
+            raise ProjectionMismatch("Stored bindings differ from declared context")
+        for name, columns in self.columns.items():
             selected = ", ".join(f'"{column}"' for column in columns)
-            cursor = self.conn.execute(
-                f'SELECT {selected} FROM "{table}" WHERE binding_id=?', (binding_id_value,)
+            key = columns.index("binding_id")
+            actual: Counter[tuple[str, bytes]] = Counter(
+                (values[key], _fingerprint(dict(zip(columns, values, strict=True))))
+                for values in select(f"SELECT {selected} FROM {table(name)}")
             )
-            actual = Counter(_row_key(dict(zip(columns, row, strict=True))) for row in cursor)
-            normalized = [
-                {
-                    key: int(value) if isinstance(value, bool) else value
-                    for key, value in row.items()
-                }
-                for row in expected
-            ]
-            if actual != Counter(map(_row_key, normalized)):
-                raise ProjectionMismatch("SQLite projection values or multiplicity differ")
-            counts[table] = len(expected)
-        self.last_counts = counts
-
-
-class VerifiedStore(Store):
-    def __init__(self, conn: Any) -> None:
-        super().__init__(conn)
-        with conn.transaction():
-            columns = conn.execute(
-                "SELECT table_name, column_name FROM information_schema.columns "
-                "WHERE table_schema='traust_storage' AND data_type IN ('json','jsonb')"
-            ).fetchall()
-        self.json_columns = set(columns)
-        self.last_counts: dict[str, int] = {}
-
-    def _project(
-        self, artifact: str, document: dict[str, Any], digest: str, binding_id_value: str
-    ) -> None:
-        from psycopg import sql
-
-        super()._project(artifact, document, digest, binding_id_value)
-        capture = ProjectionCapture(self.conn)
-        capture._project(artifact, document, digest, binding_id_value)
-        tables = {storage_profiles()[artifact]["projection"], *capture.rows}
-        if child := CHILD_TABLES.get(artifact):
-            tables.add(child)
-        counts: dict[str, int] = {}
-        for table in sorted(tables):
-            expected = capture.rows[table]
-            if not expected:
-                count = self.conn.execute(
-                    sql.SQL("SELECT count(*) FROM traust_storage.{} WHERE binding_id=%s").format(
-                        sql.Identifier(table)
-                    ),
-                    (binding_id_value,),
-                ).fetchone()[0]
-                if count:
-                    raise ProjectionMismatch("Unexpected projection rows")
-                counts[table] = 0
-                continue
-            columns = sorted(expected[0])
-            cursor = self.conn.execute(
-                sql.SQL("SELECT {} FROM traust_storage.{} WHERE binding_id=%s").format(
-                    sql.SQL(", ").join(map(sql.Identifier, columns)), sql.Identifier(table)
-                ),
-                (binding_id_value,),
-            )
-            actual = Counter(_row_key(dict(zip(columns, row, strict=True))) for row in cursor)
-            normalized = []
-            for row in expected:
-                normalized.append(
-                    {
-                        key: json.loads(value)
-                        if (table, key) in self.json_columns and value is not None
-                        else value
-                        for key, value in row.items()
-                    }
-                )
-            if actual != Counter(map(_row_key, normalized)):
+            if actual != self.rows[name]:
+                diff = (actual - self.rows[name]) + (self.rows[name] - actual)
+                differing = sorted({binding for binding, _ in diff})
                 raise ProjectionMismatch(
-                    "Projection values or multiplicity differ from source mapping"
+                    f"Projection values or multiplicity differ in {name} for {differing[:3]}"
                 )
-            counts[table] = len(expected)
-        self.last_counts = counts

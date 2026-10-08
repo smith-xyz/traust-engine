@@ -11,66 +11,20 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from traust_contracts.v1.storage import Binding, Store
-from traust_contracts.v1.storage.sql import bootstrap_files, bootstrap_statements
+from traust_contracts.v1.storage import Binding
 
 from traust_engine.corpus import migration_rehearsal as migration
 from traust_engine.corpus.migration_database import (
     BUNDLE,
-    RehearsalDatabase,
+    MigrationTarget,
     acquire_run_lock,
     save_result,
 )
 
 
-class MemoryDatabase(RehearsalDatabase):
+class MemoryDatabase(MigrationTarget):
     def __init__(self, _dsn: str) -> None:
-        self.name = "memory"
-        self.conn = sqlite3.connect(":memory:")
-        self.store = Store(self.conn)
-        self.last_binding = ""
-
-    def initialize(self) -> None:
-        for path in bootstrap_files("sqlite"):
-            if path.parent.name != "views":
-                for statement in bootstrap_statements("sqlite", path):
-                    self.conn.execute(statement)
-        self.conn.commit()
-
-    def ingest(self, artifact: str, payload: bytes, binding: Binding) -> Any:
-        import hashlib
-
-        saved = self.store.ingest(artifact, payload, binding)
-        assert saved.digest == hashlib.sha256(payload).hexdigest()
-        assert self.conn.execute(
-            "SELECT byte_size FROM artifact_evidence WHERE digest=?", (saved.digest,)
-        ).fetchone()[0] == len(payload)
-        assert self.store.get_binding(saved.binding_id).binding == binding
-        self.last_binding = saved.binding_id
-        return saved
-
-    def counts(self) -> dict[str, int]:
-        tables = [
-            row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        ]
-        return {
-            table: self.conn.execute(f'SELECT count(*) FROM "{table}"').fetchone()[0]
-            for table in tables
-            if table == "artifact_evidence"
-            or any(
-                row[1] == "binding_id" for row in self.conn.execute(f'PRAGMA table_info("{table}")')
-            )
-        }
-
-    @property
-    def projection_counts(self) -> dict[str, int]:
-        return {
-            table: self.conn.execute(
-                f'SELECT count(*) FROM "{table}" WHERE binding_id=?', (self.last_binding,)
-            ).fetchone()[0]
-            for table in self.counts()
-            if table not in {"artifact_evidence", "artifact_binding"}
-        }
+        super().__init__(sqlite3.connect(":memory:", isolation_level=None), "sqlite", "memory")
 
 
 def layer() -> dict[str, Any]:
@@ -265,6 +219,16 @@ def test_sqlite_ingests_evidence_pointer_without_reusing_target(tmp_path: Path) 
     target = tmp_path / "artifact-store.sqlite"
     result = migration.rehearse(root, config, str(target), output, database_type="sqlite")
     assert result["status"] == "passed"
+    assert result["timing"]["active_phase"] is None
+    assert set(result["timing"]["phase_seconds"]) == {
+        "inventory",
+        "bootstrap",
+        "validate",
+        "registry",
+        "ingest",
+        "reconcile",
+    }
+    assert all(seconds >= 0 for seconds in result["timing"]["phase_seconds"].values())
     assert result["reconciliation"]["checks"] == [
         "evidence_pointer",
         "binding_context",
@@ -325,6 +289,20 @@ def test_sqlite_duplicate_projection_rolls_back_and_continues(tmp_path: Path) ->
         assert conn.execute("SELECT count(*) FROM artifact_evidence").fetchone()[0] == 1
 
 
+def test_parallel_validation_matches_serial(tmp_path: Path) -> None:
+    root, config, _ = setup(tmp_path)
+    put(root, "team/good-findings-layer.json", layer())
+    put(root, "team/bad-findings-layer.json", {})
+    results = []
+    for workers in (1, 2):
+        config.write_text(
+            f"version: 1\ntrees: {{}}\nmigration: {{validation_workers: {workers}}}\n"
+        )
+        results.append(migration.preview(root, config, tmp_path / f"run-{workers}"))
+    assert results[0]["outcomes"] == results[1]["outcomes"] == {"selected": 1, "rejected": 1}
+    assert results[0]["issue_counts"] == results[1]["issue_counts"]
+
+
 def test_preview_validates_without_database_and_emits_receipts(tmp_path: Path) -> None:
     root, config, output = setup(tmp_path)
     source = put(root, "team/good-findings-layer.json", layer())
@@ -360,6 +338,49 @@ def test_scope_configuration_does_not_silently_filter_a_tree(tmp_path: Path) -> 
     result = migration.rehearse(root, config, "", output, database_factory=MemoryDatabase)
     assert result["issue_counts"] == {"unresolved_binding": 1}
     assert result["outcomes"] == {"blocked": 1}
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "UPDATE layer_event SET rationale = 'changed'",
+        "UPDATE artifact_binding SET run_id = 'corpus:run:other'",
+        "UPDATE artifact_evidence SET byte_size = byte_size + 1",
+    ],
+)
+def test_reconcile_detects_stored_values_that_differ(tmp_path: Path, tamper: str) -> None:
+    root, config, output = setup(tmp_path)
+    document = layer()
+    document["events"] = [
+        {
+            "event_id": "a" * 64,
+            "finding_ref": "F-1",
+            "recorded_at": "2026-01-01T00:00:00Z",
+            "source": {
+                "type": "interactive",
+                "ref": "https://example.test/e",
+                "actor": {"kind": "human"},
+            },
+            "disposition": {"validity": "confirmed"},
+            "rationale": "Confirmed by independent review.",
+        }
+    ]
+    put(root, "a-findings-layer.json", document)
+
+    class TamperingDatabase(MemoryDatabase):
+        def reconcile(self) -> tuple[dict[str, int], dict[str, int]]:
+            for (name,) in self.conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type='trigger'"
+            ).fetchall():
+                self.conn.execute(f'DROP TRIGGER "{name}"')
+            self.conn.execute(tamper)
+            return super().reconcile()
+
+    result = migration.rehearse(root, config, "", output, database_factory=TamperingDatabase)
+    assert result["status"] == "blocked"
+    assert not result["migration_ready"]
+    issue = json.loads((output / "issues.jsonl").read_text().splitlines()[-1])
+    assert issue["exception_type"] == "ProjectionMismatch"
 
 
 def test_source_drift_stops_the_run(tmp_path: Path) -> None:

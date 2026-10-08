@@ -81,6 +81,25 @@ def test_filesystem_repository_context_uses_product_url_and_ref(tmp_path: Path) 
         c.repository(layer, {"metadata": {"ref": "release-1.0"}})
 
 
+def test_repository_fallback_uses_parent_index(tmp_path: Path) -> None:
+    c = catalog(tmp_path)
+    audit = c.identify("findings/acm/cli/cli-security-audit.json", {})
+    c.add(audit, {"metadata": {"repository": "https://example.test/cli"}})
+    for i in range(100):
+        unrelated = c.identify(f"findings/other/repo-{i}/repo-{i}-security-audit.json", {})
+        c.add(unrelated, {"metadata": {"repository": f"https://example.test/repo-{i}"}})
+
+    class NoGlobalScan(dict):
+        def __iter__(self):
+            raise AssertionError("Repository lookup must not scan every subject")
+
+    c.repo_urls = NoGlobalScan(c.repo_urls)
+    companion = c.identify("findings/acm/cli/cli-priv-profile.json", {})
+    assert c.repository(companion, {}) == ("acm", "https://example.test/cli", "")
+    c.reset_index()
+    assert not c.directory_subjects
+
+
 def test_audit_declared_ref_is_shared_with_companion(tmp_path: Path) -> None:
     c = catalog(tmp_path)
     audit = c.identify("findings/acm/cli/cli-security-audit.json", {})

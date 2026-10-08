@@ -2,6 +2,17 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.19.3]
+
+## Changes
+
+- Record projection rows as contracts writes them, reject dropped rows by rowcount, and
+  verify evidence, bindings and projection values in one bulk pass at reconciliation
+  instead of re-projecting and reading back each artifact.
+- Replace the SQLite and PostgreSQL rehearsal databases with one `MigrationTarget`.
+- Share one database-free resolve step between preview and load; record per-phase timing.
+- Type migration decisions and plans; migration modules pass `mypy --strict`.
+
 ## [0.19.2]
 
 ## Changes

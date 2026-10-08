@@ -225,37 +225,44 @@ class ArtifactCatalog:
         for reference in (artifact.relative, str(Path(artifact.relative).with_suffix(".md"))):
             self.references[reference].add(artifact.subject)
             self.reference_names[Path(reference).name].add(reference)
-        if isinstance(document, dict):
-            metadata = document.get("metadata")
-            repository = metadata.get("repository") if isinstance(metadata, dict) else None
-            if isinstance(repository, str) and artifact.family in {"report", "cloud-config-audit"}:
-                url = normalize_repo_url(repository)
-                key = _canonical_repo_url(url)
-                if key:
-                    self.repositories[key].add(artifact.subject)
-                    self.repo_urls[artifact.subject].add(key)
-                    self.directory_subjects[str(Path(artifact.subject).parent)].add(
-                        artifact.subject
-                    )
-                    declared = metadata.get("ref")
-                    if isinstance(declared, str) and declared:
-                        self.repo_refs[artifact.subject].add(declared)
-                        if not artifact.relative.endswith("-findings-current.json"):
-                            date = metadata.get("date")
-                            timestamp = None
-                            if isinstance(date, str):
-                                try:
-                                    timestamp = datetime.fromisoformat(date.replace("Z", "+00:00"))
-                                    timestamp = (
-                                        timestamp.replace(tzinfo=UTC)
-                                        if timestamp.tzinfo is None
-                                        else timestamp.astimezone(UTC)
-                                    )
-                                except ValueError:
-                                    timestamp = None
-                            self.audit_contexts[artifact.subject].append(
-                                (artifact.relative, key, declared, timestamp)
-                            )
+        metadata = document.get("metadata") if isinstance(document, dict) else None
+        if not isinstance(metadata, dict) or artifact.family not in {
+            "report",
+            "cloud-config-audit",
+        }:
+            return
+        repository = metadata.get("repository")
+        key = (
+            _canonical_repo_url(normalize_repo_url(repository))
+            if isinstance(repository, str)
+            else None
+        )
+        if not key:
+            return
+        self.repositories[key].add(artifact.subject)
+        self.repo_urls[artifact.subject].add(key)
+        self.directory_subjects[Path(artifact.subject).parent.as_posix()].add(artifact.subject)
+        declared = metadata.get("ref")
+        if isinstance(declared, str) and declared:
+            self.repo_refs[artifact.subject].add(declared)
+            if self.options.multi_ref_policy == "newest" and not artifact.relative.endswith(
+                "-findings-current.json"
+            ):
+                date = metadata.get("date")
+                timestamp = None
+                if isinstance(date, str):
+                    try:
+                        timestamp = datetime.fromisoformat(date.replace("Z", "+00:00"))
+                        timestamp = (
+                            timestamp.replace(tzinfo=UTC)
+                            if timestamp.tzinfo is None
+                            else timestamp.astimezone(UTC)
+                        )
+                    except ValueError:
+                        timestamp = None
+                self.audit_contexts[artifact.subject].append(
+                    (artifact.relative, key, declared, timestamp)
+                )
 
     def source_subjects(self, reference: str, relative: str) -> set[str]:
         subjects: set[str] = set()
@@ -267,19 +274,20 @@ class ArtifactCatalog:
 
     def newest_context(
         self, candidates: set[str], repository: str
-    ) -> tuple[str, str, str, datetime | None]:
+    ) -> tuple[str, str, str, datetime]:
         contexts = [
             context
             for subject in candidates
             for context in self.audit_contexts[subject]
             if context[1] == repository
         ]
-        if not contexts or any(context[3] is None for context in contexts):
+        dated = [(source, url, ref, date) for source, url, ref, date in contexts if date]
+        if not dated or len(dated) != len(contexts):
             raise DiscoveryError(
                 "ambiguous_repository", "Newest context requires valid recorded audit dates"
             )
-        newest = max(context[3] for context in contexts if context[3] is not None)
-        winners = [context for context in contexts if context[3] == newest]
+        newest = max(context[3] for context in dated)
+        winners = [context for context in dated if context[3] == newest]
         if len({context[2] for context in winners}) != 1:
             raise DiscoveryError(
                 "ambiguous_repository", "Newest audit dates tie across repository refs"
@@ -302,7 +310,7 @@ class ArtifactCatalog:
         candidates = {owner}
         if not known:
             parent = Path(owner).parent
-            candidates = self.directory_subjects.get(str(parent), set())
+            candidates = self.directory_subjects.get(parent.as_posix(), set())
             known = set().union(*(self.repo_urls[name] for name in candidates))
         if direct and known and direct not in known:
             raise DiscoveryError(
@@ -327,10 +335,9 @@ class ArtifactCatalog:
         declared = metadata.get("ref") if isinstance(metadata, dict) else None
         inherited = set().union(*(self.repo_refs[name] for name in candidates))
         if len(inherited) > 1:
-            if self.options.multi_ref_policy == "newest" and (declared or legacy_ref):
-                inherited = (
-                    {declared or legacy_ref} if (declared or legacy_ref) in inherited else inherited
-                )
+            pinned = declared or legacy_ref
+            if self.options.multi_ref_policy == "newest" and pinned and pinned in inherited:
+                inherited = {pinned}
             if len(inherited) > 1 and self.options.multi_ref_policy == "newest":
                 if artifact.family in {
                     "report",

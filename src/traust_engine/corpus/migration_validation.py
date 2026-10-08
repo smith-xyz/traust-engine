@@ -64,6 +64,7 @@ class ValidatedArtifact:
     artifact: str
     payload: bytes
     digest: str
+    document: dict[str, Any]
 
 
 class NumberRepresentationError(ValueError):
@@ -130,17 +131,17 @@ def validate_artifact(
             )
         ) from None
     issues: list[MigrationIssue] = []
-    for error in validator.iter_errors(document):
+    for violation in validator.iter_errors(document):
         missing = (
-            tuple(key for key in error.validator_value if key not in error.instance)
-            if error.validator == "required" and isinstance(error.instance, dict)
+            tuple(key for key in violation.validator_value if key not in violation.instance)
+            if violation.validator == "required" and isinstance(violation.instance, dict)
             else ()
         )
-        value = json.dumps(error.instance, ensure_ascii=True, separators=(",", ":")).encode()
+        value = json.dumps(violation.instance, ensure_ascii=True, separators=(",", ":")).encode()
         message = (
             "Required fields missing: " + ", ".join(missing)
             if missing
-            else f"Contract rule failed: {error.validator}"
+            else f"Contract rule failed: {violation.validator}"
         )
         issues.append(
             MigrationIssue(
@@ -150,17 +151,17 @@ def validate_artifact(
                 error_class="contract_validation",
                 factual_message=message,
                 source_digest=digest,
-                source_json_pointer=_pointer(error.absolute_path),
-                schema_rule=f"{artifact}.schema.json#{_pointer(error.absolute_schema_path)}",
+                source_json_pointer=_pointer(violation.absolute_path),
+                schema_rule=f"{artifact}.schema.json#{_pointer(violation.absolute_schema_path)}",
                 missing_fields=missing,
-                value_type=type(error.instance).__name__,
+                value_type=type(violation.instance).__name__,
                 value_sha256=hashlib.sha256(value).hexdigest(),
                 value_length=len(value),
-                is_null=error.instance is None,
+                is_null=violation.instance is None,
             )
         )
         if not collect_all:
             break
     if issues:
         raise MigrationValidationError(*issues)
-    return ValidatedArtifact(path, artifact, payload, digest)
+    return ValidatedArtifact(path, artifact, payload, digest, document)

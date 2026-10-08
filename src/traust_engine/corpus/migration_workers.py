@@ -36,10 +36,10 @@ def validation_results(
     with ProcessPoolExecutor(max_workers=workers, mp_context=get_context("spawn")) as pool:
         pending: deque[tuple[tuple[str, str, str], Future[list[dict[str, Any]]]]] = deque()
         for _ in range(workers * 2):
-            task = next(tasks, None)
-            if task is None:
+            queued = next(tasks, None)
+            if queued is None:
                 break
-            pending.append((task, pool.submit(validate_source, task)))
+            pending.append((queued, pool.submit(validate_source, queued)))
         while pending:
             task, future = pending.popleft()
             yield task, future.result()
