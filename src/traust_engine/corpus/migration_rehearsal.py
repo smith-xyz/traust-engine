@@ -24,6 +24,7 @@ from traust_engine.corpus import (
     migration_database,
     migration_discovery,
     migration_projection,
+    migration_refs,
     migration_validation,
     migration_workers,
     store_ingest,
@@ -426,9 +427,11 @@ class Rehearsal:
                         "unresolved_repository", "Ledger layer needs a product_repo"
                     )
                 metadata = document.get("metadata")
-                commit = metadata.get("commit") if isinstance(metadata, dict) else None
-                if commit is not None and (not isinstance(commit, str) or not commit):
-                    raise DiscoveryError("ambiguous_repository", "Invalid artifact commit")
+                commit = migration_refs.recorded_commit(
+                    metadata.get("commit") if isinstance(metadata, dict) else None
+                )
+                if repository is not None:
+                    migration_refs.repository_ref(repository[2])
                 if decision.namespace == "traust_ledger":
                     self.claim_layer(relative, binding.layer_id)
                 self.plans[relative] = ImportPlan(replace(binding, commit_sha=commit), repository)
