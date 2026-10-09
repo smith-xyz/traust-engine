@@ -2,6 +2,15 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.19.4]
+
+## Changes
+
+- Block diagnostic prose or branch text in artifact commit metadata before
+  native ownership registration/ingestion; preserve absent commits and original bytes.
+- Validate requested repository refs against worker character restrictions and
+  Git syntax without extracting requested/unreachable SHAs or substituting HEAD.
+
 ## [0.19.3]
 
 ## Changes
