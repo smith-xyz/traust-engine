@@ -2,6 +2,49 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.19.3]
+
+## Changes
+
+- Record projection rows as contracts writes them, reject dropped rows by rowcount, and
+  verify evidence, bindings and projection values in one bulk pass at reconciliation
+  instead of re-projecting and reading back each artifact.
+- Replace the SQLite and PostgreSQL rehearsal databases with one `MigrationTarget`.
+- Share one database-free resolve step between preview and load; record per-phase timing.
+- Type migration decisions and plans; migration modules pass `mypy --strict`.
+
+## [0.19.2]
+
+## Changes
+
+- Add bounded, opt-in spawned validation processes while retaining deterministic
+  decisions and ordered single-connection database writes.
+- Index directory ownership, cache exact repository registrations and prepared
+  bindings, and avoid repeating schema validation for hash-verified bytes.
+- Expose validation/registration phase progress and exclude derived PostgreSQL
+  views from physical projection counts during final reconciliation.
+
+## [0.19.1]
+
+## Changes
+
+- Add opt-in `migration.multi_ref_policy: newest` for unqualified companion
+  ownership. Rank recorded baseline audit dates, preserve explicit branches,
+  block cross-ref ties and missing dates, and record the selected audit/ref.
+- Do not reassign historical reports, triages or Ledger histories to a newer
+  branch without an exact baseline binding. Default ambiguity handling is unchanged.
+
+## [0.19.0]
+
+## Changes
+
+- Import filesystem product/repo/ref relationships into the contracts 0.50.0 registry
+  before ingesting artifacts; bind repository IDs and commit SHAs to evidence.
+- Export ledger selections with product_repo IDs, or import them into a selected
+  ledger target after storage reconciliation (`ledger-migration` extra).
+- Pin traust-contracts 9e5e6605 and traust-ledger 5c326338; bootstrap fresh
+  storage with `Store.migrate()`.
+
 ## [0.18.2]
 
 ## Changes

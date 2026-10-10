@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "traust-engine"
-version = "0.18.2"
+version = "0.19.3"
 license = "Apache-2.0"
 description = "Processing core for the AI security harness: scanners, data management, analysis, format handlers"
 requires-python = ">=3.11"
@@ -17,6 +17,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+postgres = ["psycopg[binary]>=3"]
+ledger-migration = ["traust-ledger[db]"]
 graph = [
     "tree-sitter",
     "tree-sitter-go",
@@ -37,8 +39,8 @@ gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
 dev = ["fsspec>=2024.2", "pytest>=9.1.1", "ruff>=0.6", "vulture>=2.16"]
 
 [tool.uv.sources]
-traust-contracts = { git = "https://github.com/smith-xyz/traust-contracts.git", rev = "104519fd18f724e121c492c160e3dc2d67408f90" }
-traust-ledger = { git = "https://github.com/smith-xyz/traust-ledger.git", rev = "d28490aeb178c3369e84b0956616fbac059207f7" }
+traust-contracts = { git = "https://github.com/smith-xyz/traust-contracts.git", rev = "9e5e6605d6b1e6624153c2ee8cd56f3c812d72e2" }
+traust-ledger = { git = "https://github.com/smith-xyz/traust-ledger.git", rev = "5c3263385d6fbb262e45956175679288e8d38b97" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/traust_engine"]
@@ -50,6 +52,7 @@ exclude = ["/.ci-venv", "/.venv"]
 testpaths = ["tests"]
 markers = [
     "integration: tests requiring external binaries (gitleaks, opengrep) on PATH",
+    "postgres: e2e tests requiring the shared traust-postgres instance (auto-skip unless TRAUST_MIGRATION_TEST_DATABASE_URL is reachable)",
     "requires_git: test creates git repos in tmp dirs (skipped when git init is blocked)",
     "unbound_safe_exec: skip autouse profile bind; assert fallback or explicit profile_map",
 ]
