@@ -2,6 +2,21 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.38.1]
+
+- **Fixed: seeded-fixture reports could never pass validation.**
+  - **The conflict:** recall-benchmark seeded fixtures are local git
+    checkouts registered with a `file://` `repo_url` (`build_canaries.py`),
+    and the scorer matches a run's `metadata.repository` against that URL.
+    The validator accepted only `https://` URLs, so a fixture report could
+    either validate or be scored, never both.
+  - **The fix:** a `file:///…` repository is now a single warning ("local
+    fixture checkout; benchmark and seeded-fixture runs only"), not an
+    error plus a "does not parse" warning.
+  - A bare `file:///` or a trailing slash is still an error. Every other
+    shape is unchanged.
+  - Found by the first audit of the `llm-app` fixture.
+
 ## [0.38.0]
 
 - **New `adapters/llm_app.py`: deterministic detection of LLM, agent and
