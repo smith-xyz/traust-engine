@@ -2,6 +2,21 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.38.2]
+
+- **Pins traust-contracts 0.62.0 (`f8c9cbd`) and traust-ledger 0.11.4
+  (`366ccb0`):** report findings gain `owasp_llm_references` (OWASP Top 10
+  for LLM Applications category IDs). Storage revision 6 carries it in
+  `report_finding`.
+- **Fixed: the validator named a fingerprint command that does nothing.**
+  - **The problem:** fingerprint-mismatch and autolink errors told you to
+    run `python3 -m traust_engine._util.finding_identity fingerprint …
+    --write`. That module has no entry point, because the CLI moved to
+    traust, so the command exited silently without stamping anything.
+  - **The fix:** the messages now name
+    `python3 -m traust.cli corpus finding-identity`. The module docstring
+    points at the same command, and the empty `# CLI` section is gone.
+
 ## [0.38.1]
 
 - **Fixed: seeded-fixture reports could never pass validation.**

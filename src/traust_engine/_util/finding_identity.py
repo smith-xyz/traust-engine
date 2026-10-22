@@ -71,10 +71,10 @@ bump `ALGO_VERSION` in `traust_ledger/identity.py`, regenerate, and pair it with
 re-stamp migration. A v1 -> v2 move may need hundreds of them; keep a restamp
 worklist alongside the identity migration plan.
 
-CLI:
-    python3 -m traust_engine._util.finding_identity fingerprint <audit.json> [--write]
-    python3 -m traust_engine._util.finding_identity backfill <findings-root> [--dry-run]
-    python3 -m traust_engine._util.finding_identity rebaseline <old-audit.json> \\
+CLI (in traust; this module is the library behind it):
+    python3 -m traust.cli corpus finding-identity fingerprint <audit.json> [--write]
+    python3 -m traust.cli corpus finding-identity backfill <findings-root> [--dry-run]
+    python3 -m traust.cli corpus finding-identity rebaseline <old-audit.json> \\
         <new-audit.json> <layer.json> [--dry-run]
 """
 
@@ -656,8 +656,3 @@ def run_attribute(root: Path, *, write: bool = False) -> int:
         _persist_report(path, document)
     print(f"\nwrote {sum(n for _, _, n in to_write)} marker(s) to {len(to_write)} file(s)")
     return 0
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------

@@ -33,7 +33,9 @@ CANONICAL_FINDING_ID = re.compile(r"^[A-Z][A-Z0-9_]{0,23}-[a-f0-9]{7}-\d{3}$")
 # The one runnable form of the identity tool. `traust_engine._util.finding_identity`
 # has not existed since the code moved into this package, and the "Fix:"
 # lines below get copy-pasted by whoever hit the error.
-_IDENTITY_CMD = "python3 -m traust_engine._util.finding_identity"
+# The finding-identity CLI lives in traust (`traust corpus finding-identity`);
+# this module ships only the library. The message must name a command that runs.
+_IDENTITY_CMD = "python3 -m traust.cli corpus finding-identity"
 # traust reset its version to 0.1.0 on this date (release: reset to 0.1.0,
 # 2026-09-10). Versions before and after overlap -- a pre-reset 0.186.2 and a
 # post-reset 0.18.6 compare the wrong way round -- so a version gate first
