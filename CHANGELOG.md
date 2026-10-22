@@ -2,6 +2,44 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.38.0]
+
+- **New `adapters/llm_app.py`: deterministic detection of LLM, agent and
+  MCP applications** (deepsec-comparison plan v2.1, workstream D1).
+  `detect(repo)` tags a checkout, and the files in it, when any of these
+  appears:
+  - **Source imports**, with `file:line` evidence, in Python, JS/TS, Go,
+    Java/Kotlin and Rust:
+    - model SDKs (OpenAI, Anthropic, Google GenAI, Mistral, Cohere, Groq,
+      Ollama, LiteLLM, transformers, vLLM…);
+    - agent frameworks (LangChain/LangGraph, LlamaIndex, CrewAI, AutoGen,
+      Semantic Kernel, Haystack, DSPy, langchaingo, LangChain4j, Spring
+      AI…);
+    - MCP server SDKs;
+    - vector stores (Chroma, Pinecone, Qdrant, Weaviate, Milvus, FAISS,
+      LanceDB, pgvector).
+  - **Direct manifest declarations**: never lockfiles, which also list
+    transitive libraries, and never indirect `go.mod` requires.
+  - **Prompt-template files**: `.prompt`, `.prompty`, and templates under
+    a `prompt(s)/` directory.
+- **One deterministic hop through in-repo wrappers:** a file that imports
+  a tagged in-repo module (Python, or relative JS/TS imports) is tagged
+  with the module's kinds and listed in `files_via_wrapper`. Calling the
+  SDK through an internal `llm.py` is the common shape. On mlflow that
+  adds 252 files (484 in total).
+- **Output:** `llm_application`, `kinds`, `signals` (kind, library, via
+  import/declared/file, evidence), the tagged `files` and
+  `files_via_wrapper`.
+- **It is a fact and a candidate generator, never a finding.** It reads
+  files only: nothing is imported or run, and no git command runs in the
+  target. It gates the LLM application review checklist and the
+  `llm-integration` review surface.
+- **On real clones:**
+  - etcd and mp-export-api: none;
+  - mlflow: tagged (model SDKs, agent frameworks, MCP, vector stores; 232
+    files);
+  - feast: tagged (vector stores, a declared MCP server; 12 files).
+
 ## [0.37.1]
 
 - **Fixed: `go.mod` `replace` directives were ignored** by the dependency
