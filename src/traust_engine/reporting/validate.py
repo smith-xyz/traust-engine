@@ -314,7 +314,9 @@ def cross_validate(report: dict, result: ValidationResult):
                 "metadata.repository contains whitespace/multiple URLs "
                 f"({_repo_raw[:80]!r}) — use exactly one repository URL"
             )
-        elif not re.match(r"^(https?://|git@)", _repo_raw.strip()):
+        elif not re.match(r"^(https?://|git@)", _repo_raw.strip()) and not _is_local_fixture_url(
+            _repo_raw
+        ):
             result.warn(
                 f"metadata.repository ({_repo_raw[:80]!r}) is not a URL — "
                 "use the full https:// (or git@) repository URL"

@@ -622,8 +622,9 @@ class TestStrictConventions(unittest.TestCase):
         validate.check_metadata_repository(r, result)
         self.assertEqual(result.errors, [])
         self.assertTrue(any("local fixture checkout" in w for w in result.warnings))
-        # and no second "does not parse" warning for the same value
-        self.assertFalse(any("does not parse" in w for w in self._warnings(r)))
+        # and no second "does not parse" or "is not a URL" warning for the same value
+        warnings = self._warnings(r)
+        self.assertFalse(any("does not parse" in w or "is not a URL" in w for w in warnings))
         # a bare file:// root, or a trailing slash, is still malformed
         for bad in ("file:///", "file:///tmp/x/"):
             r["metadata"]["repository"] = bad
