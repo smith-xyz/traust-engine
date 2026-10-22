@@ -122,6 +122,40 @@ v1.9 (2026-10-16): **two misses from a recall-fixture run.**
   Whether anyone other than the operator can write the field is the
   review's judgement.
 
+v1.10 (2026-10-22): **LLM-application tranche** (`<lang>/llm-application.yaml`
+for Python, TypeScript and Go). Every rule carries `metadata.owasp_llm`
+(OWASP Top 10 for LLM Applications IDs) next to its CWEs. Only shapes that
+can be decided from the code itself are here. Whether a tool needs a
+per-caller authorization check, how much agency a model should have, and
+prompt-injection exposure are left to the review surface.
+- **Model output is untrusted input (LLM05, CWE-1426 plus the sink's CWE).**
+  Taint rules from SDK completion calls (OpenAI, Anthropic, Gemini,
+  LiteLLM, Ollama, LangChain `invoke`, Vercel AI `generateText`, Go
+  `openai-go`/`go-openai`/`anthropic-sdk-go`/langchaingo) and their response
+  shapes (`choices[i].message.content`, `content[i].text`, `output_text`)
+  to:
+  - a shell (`output-to-shell-taint`, Go `output-to-exec-taint`)
+  - code evaluation (`output-to-code-exec-taint`; Python and TypeScript)
+  - SQL text (`output-to-sql-taint`)
+  - file paths (`output-to-path-taint`; Python and Go)
+- **Supply chain (LLM03, Python only):** `trust-remote-code`,
+  `unsafe-model-deserialization` (`torch.load(weights_only=False)`),
+  `model-load-default-pickle` (no `weights_only`; WARNING), and
+  `unpinned-model-download` (`from_pretrained`/`hf_hub_download`/
+  `snapshot_download` with no `revision`; local paths excluded).
+- **`mcp-http-without-auth` (LLM06, CWE-306).** An MCP server on an HTTP or
+  SSE transport, in a file that configures no authentication. Stdio servers
+  and transports chosen at run time are not matched. FastMCP `auth=`,
+  `token_verifier=` or `auth_server_provider=` clears a match, and so does
+  any bearer/OAuth/JWT/auth-middleware construct in the file. A per-tool
+  "handler has no auth call" rule was tried first and dropped: on
+  modelcontextprotocol/servers, github/github-mcp-server and the TypeScript
+  SDK examples it flagged almost every tool. Those servers are stdio-local,
+  delegate to the user's own token, or authenticate at the transport.
+- **`unbounded-agent-loop` (LLM10, CWE-834).** `while True` / `while (true)`
+  / `for (;;)` / Go `for {}` whose body calls a model and names no step,
+  budget, deadline or timeout bound.
+
 Engine note (v1.8): `metavariable-regex` is anchored at the start of the
 bound text, so a "contains" test needs a leading `.*` (`(?is).*\blike\b`),
 and it cannot sit directly under `pattern-either` — wrap each branch in
