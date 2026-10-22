@@ -2,6 +2,25 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.39.0]
+
+- **New: LLM-application rule pack (plan step D3) for Python, TypeScript
+  and Go** (`opengrep-rules/<lang>/llm-application.yaml`, rule-pack README
+  v1.10). These are deterministic rules for shapes that can be decided from
+  code. Each carries `metadata.owasp_llm` next to its CWEs.
+  - **Model output reaching a dangerous sink:** taint from SDK completion
+    calls and response shapes into a shell, code evaluation, SQL text or a
+    file path (LLM05; CWE-1426 plus the sink's CWE).
+  - **Model supply chain (Python):** `trust_remote_code=True`,
+    `torch.load` with `weights_only=False` or left at the default, and Hub
+    downloads with no pinned `revision` (LLM03).
+  - **MCP server on HTTP/SSE with no authentication in the file** (LLM06,
+    CWE-306). A per-tool "no auth call in the handler" rule was dropped
+    after it flagged almost every tool in real MCP servers; per-tool
+    authorization is left to review.
+  - **Unbounded agent loops:** an unconditional loop that calls a model
+    and names no step, budget, deadline or timeout bound (LLM10, CWE-834).
+
 ## [0.38.2]
 
 - **Pins traust-contracts 0.62.0 (`f8c9cbd`) and traust-ledger 0.11.4
