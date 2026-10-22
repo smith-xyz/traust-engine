@@ -637,6 +637,14 @@ def check_metadata_repository(report: dict, result: ValidationResult):
             f"Strip them and re-run {_IDENTITY_CMD} fingerprint <report.json> --write."
         )
         return
+    if _is_local_fixture_url(s):
+        result.warn(
+            f"metadata.repository {s[:60]!r} is a local fixture checkout (file://). "
+            "Accepted only for recall-benchmark and seeded-fixture runs, whose "
+            "manifest repo_url is a file:// path; a campaign report needs the "
+            "https:// repository URL."
+        )
+        return
     if not _REPO_URL_RE.match(s):
         result.error(
             f"metadata.repository {s[:60]!r} does not look like a "
@@ -647,6 +655,14 @@ def check_metadata_repository(report: dict, result: ValidationResult):
 
 
 _REPO_URL_RE = re.compile(r"^https://[a-z0-9.-]+/[^/]+/.+$", re.I)
+# Seeded benchmark fixtures are materialized as local git repositories and
+# registered with a file:// repo_url (build_canaries.py); the scorer matches a
+# run's metadata.repository against it, so those runs must carry it verbatim.
+_LOCAL_FIXTURE_RE = re.compile(r"^file:///[^\s]*[^/\s]$")
+
+
+def _is_local_fixture_url(url: str) -> bool:
+    return bool(_LOCAL_FIXTURE_RE.match(url.strip()))
 
 
 def _review_surfaces() -> list[str]:
@@ -1643,7 +1659,7 @@ def strict_checks(report: dict, result: ValidationResult):
             "Strict: metadata.repository missing — org-index and repo-graph "
             "cannot attribute this report to a repository"
         )
-    elif not _repository_parses(repo_url):
+    elif not _repository_parses(repo_url) and not _is_local_fixture_url(repo_url):
         result.warn(
             f"Strict: metadata.repository {repo_url!r} does not parse as "
             "https://<host>/<org>/<repo> — build_org_index.py skips such "

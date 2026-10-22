@@ -613,6 +613,24 @@ class TestStrictConventions(unittest.TestCase):
             r["metadata"]["repository"] = ok
             self.assertFalse(any("repository" in w for w in self._warnings(r)), ok)
 
+    def test_a_local_fixture_repository_is_a_warning_not_an_error(self):
+        """Seeded benchmark fixtures are file:// checkouts: the scorer needs the
+        report to carry that URL verbatim, so it must not fail validation."""
+        r = copy.deepcopy(_valid_report())
+        r["metadata"]["repository"] = "file:///Users/someone/.cache/recall-bench/canaries/llm-app"
+        result = validate.ValidationResult("report.json")
+        validate.check_metadata_repository(r, result)
+        self.assertEqual(result.errors, [])
+        self.assertTrue(any("local fixture checkout" in w for w in result.warnings))
+        # and no second "does not parse" warning for the same value
+        self.assertFalse(any("does not parse" in w for w in self._warnings(r)))
+        # a bare file:// root, or a trailing slash, is still malformed
+        for bad in ("file:///", "file:///tmp/x/"):
+            r["metadata"]["repository"] = bad
+            result = validate.ValidationResult("report.json")
+            validate.check_metadata_repository(r, result)
+            self.assertTrue(result.errors, bad)
+
     def test_no_cvss_warning_for_informational(self):
         r = copy.deepcopy(_valid_report())
         r["findings"][1]["severity"] = "informational"
