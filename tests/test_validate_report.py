@@ -1446,7 +1446,7 @@ class TestFindingIdentityStamp:
     def test_missing_stamp_errors_and_names_the_fix(self):
         res = self._run(self._rep(self.AUTO, None))
         assert len(res.errors) == 1
-        assert "traust_engine._util.finding_identity fingerprint" in res.errors[0]
+        assert "traust.cli corpus finding-identity fingerprint" in res.errors[0]
 
     def test_no_findings_is_silent(self):
         assert not self._run({"findings": []}).warnings
