@@ -22,8 +22,14 @@ All notable changes to traust-engine are documented here.
     transitive libraries, and never indirect `go.mod` requires.
   - **Prompt-template files**: `.prompt`, `.prompty`, and templates under
     a `prompt(s)/` directory.
+- **One deterministic hop through in-repo wrappers:** a file that imports
+  a tagged in-repo module (Python, or relative JS/TS imports) is tagged
+  with the module's kinds and listed in `files_via_wrapper`. Calling the
+  SDK through an internal `llm.py` is the common shape. On mlflow that
+  adds 252 files (484 in total).
 - **Output:** `llm_application`, `kinds`, `signals` (kind, library, via
-  import/declared/file, evidence) and the tagged `files`.
+  import/declared/file, evidence), the tagged `files` and
+  `files_via_wrapper`.
 - **It is a fact and a candidate generator, never a finding.** It reads
   files only: nothing is imported or run, and no git command runs in the
   target. It gates the LLM application review checklist and the

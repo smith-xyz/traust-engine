@@ -138,3 +138,28 @@ def test_kinds_are_ordered_and_evidence_capped(tmp_path):
 def test_not_a_directory(tmp_path):
     with pytest.raises(ValueError):
         llm_app.detect(tmp_path / "missing")
+
+
+def test_a_file_using_an_in_repo_wrapper_is_tagged(tmp_path):
+    write(tmp_path, "app/llm.py", "from openai import OpenAI\n")
+    write(tmp_path, "app/reports.py", "from app.llm import complete\n")
+    write(tmp_path, "app/relative.py", "from .llm import complete\n")
+    write(tmp_path, "app/plain.py", "import json\n")
+    doc = llm_app.detect(tmp_path)
+    assert doc["files"]["app/reports.py"] == ["model-sdk"]
+    assert doc["files"]["app/relative.py"] == ["model-sdk"]
+    assert "app/plain.py" not in doc["files"]
+    assert doc["files_via_wrapper"] == {
+        "app/relative.py": ["app/llm.py"],
+        "app/reports.py": ["app/llm.py"],
+    }
+
+
+def test_the_wrapper_hop_covers_relative_js_imports(tmp_path):
+    write(tmp_path, "src/lib/model.ts", "import OpenAI from 'openai';\n")
+    write(tmp_path, "src/routes/chat.ts", "import { ask } from '../lib/model';\n")
+    write(tmp_path, "src/routes/index.js", "const m = require('./chat.js');\n")
+    doc = llm_app.detect(tmp_path)
+    assert doc["files"]["src/routes/chat.ts"] == ["model-sdk"]
+    # one hop only: index.js imports chat.ts, which is tagged only via the wrapper
+    assert "src/routes/index.js" not in doc["files"]

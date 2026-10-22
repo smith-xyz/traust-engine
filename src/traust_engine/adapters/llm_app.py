@@ -279,6 +279,69 @@ def _imports(lang: str, text: str):
                 yield lineno, hit
 
 
+_PY_LOCAL = re.compile(r"^\s*(?:from\s+(\.*[\w.]*)\s+import\s+([\w*, ()]+)|import\s+([\w.]+))")
+_JS_LOCAL = re.compile(
+    r"""(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(?\s*)['"](\.{1,2}/[^'"]+)['"]"""
+)
+_JS_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts")
+
+
+def _local_targets(lang: str, rel: str, text: str, known: set[str]) -> set[str]:
+    """In-repo files a source file imports (Python modules, relative JS/TS)."""
+    here = Path(rel).parent
+    out: set[str] = set()
+    if lang == "python":
+        for line in text.splitlines():
+            m = _PY_LOCAL.match(line)
+            if not m:
+                continue
+            if m.group(3):
+                mods = [m.group(3)]
+            else:
+                base, names = m.group(1), m.group(2)
+                dots = len(base) - len(base.lstrip("."))
+                root = here
+                for _ in range(max(dots - 1, 0)):
+                    root = root.parent
+                stem = base.lstrip(".")
+                prefix = (
+                    (root.as_posix() + "/" if dots and root.as_posix() != "." else "")
+                    if dots
+                    else ""
+                )
+                mods = [prefix.replace("/", ".") + stem] if stem else []
+                # "from pkg import module" may name submodules
+                for n in re.split(r"[,\s()]+", names):
+                    if n and n != "*":
+                        mods.append(f"{prefix.replace('/', '.')}{stem + '.' if stem else ''}{n}")
+            for mod in mods:
+                path = mod.strip(".").replace(".", "/")
+                for cand in (f"{path}.py", f"{path}/__init__.py"):
+                    if cand in known:
+                        out.add(cand)
+    elif lang == "js":
+        for m in _JS_LOCAL.finditer(text):
+            target = (here / m.group(1)).as_posix()
+            parts = []
+            for seg in target.split("/"):
+                if seg == "..":
+                    if parts:
+                        parts.pop()
+                elif seg not in (".", ""):
+                    parts.append(seg)
+            base = "/".join(parts)
+            stem = re.sub(r"\.(js|mjs|cjs)$", "", base)
+            for cand in [
+                base,
+                *(stem + e for e in _JS_EXTS),
+                *(f"{base}/index{e}" for e in _JS_EXTS),
+            ]:
+                if cand in known:
+                    out.add(cand)
+    out.discard(rel)
+    return out
+
+
 def _is_prompt_template(rel: str) -> bool:
     low = rel.lower()
     if low.endswith(PROMPT_SUFFIXES):
@@ -346,6 +409,7 @@ def detect(repo: Path) -> dict:
     signals: dict[tuple[str, str], dict] = {}
     files: dict[str, set[str]] = defaultdict(set)
     stats = {"source_files_read": 0, "manifests_read": 0, "skipped_large": 0}
+    sources: dict[str, tuple[str, str]] = {}  # rel -> (lang, text), for the wrapper hop
 
     def note(kind: str, library: str, source: str, evidence: str) -> None:
         sig = signals.setdefault(
@@ -381,6 +445,7 @@ def detect(repo: Path) -> dict:
                 continue
             if lang:
                 stats["source_files_read"] += 1
+                sources[rel] = (lang, text)
                 for lineno, (kind, library) in _imports(lang, text):
                     note(kind, library, "import", f"{rel}:{lineno}")
                     files[rel].add(kind)
@@ -388,6 +453,21 @@ def detect(repo: Path) -> dict:
                 stats["manifests_read"] += 1
                 for dep, (kind, library) in _declared(repo, rel, text):
                     note(kind, library, "declared", f"{rel} ({dep})")
+
+    # One deterministic hop: a file that imports an in-repo module that is
+    # itself tagged (an internal wrapper around the SDK, the common shape)
+    # uses the same library through it.
+    via_wrapper: dict[str, set[str]] = defaultdict(set)
+    tagged = {rel for rel, k in files.items() if k - {"prompt-template"}}
+    known = set(sources)
+    for rel, (lang, text) in sources.items():
+        if rel in tagged:
+            continue
+        for target in _local_targets(lang, rel, text, known) & tagged:
+            via_wrapper[rel].add(target)
+    for rel, targets in via_wrapper.items():
+        for target in targets:
+            files[rel].update(files[target] - {"prompt-template"})
 
     out_signals = []
     for _key, sig in sorted(signals.items(), key=lambda kv: (KINDS.index(kv[0][0]), kv[0][1])):
@@ -398,5 +478,7 @@ def detect(repo: Path) -> dict:
         "kinds": kinds,
         "signals": out_signals,
         "files": {rel: sorted(k, key=KINDS.index) for rel, k in sorted(files.items())},
+        # files tagged only because they import a tagged in-repo module
+        "files_via_wrapper": {rel: sorted(t) for rel, t in sorted(via_wrapper.items())},
         "stats": stats,
     }
