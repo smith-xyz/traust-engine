@@ -20,6 +20,10 @@ All notable changes to traust-engine are documented here.
     authorization is left to review.
   - **Unbounded agent loops:** an unconditional loop that calls a model
     and names no step, budget, deadline or timeout bound (LLM10, CWE-834).
+- **Opengrep facts carry `owasp_llm`.** The adapter copied `metadata.owasp`
+  into each fact but dropped the new `metadata.owasp_llm`, so the category
+  never reached the audit. Facts now have an `owasp_llm` list (empty for
+  rules without it), which the audit copies into `owasp_llm_references`.
 
 ## [0.38.2]
 
