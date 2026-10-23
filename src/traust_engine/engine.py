@@ -24,7 +24,6 @@ from traust_contracts import HarnessContext, load_context
 
 from traust_engine.adapters.ops import AdaptersOps
 from traust_engine.compliance.ops import ComplianceOps
-from traust_engine.impact.ops import ImpactOps
 from traust_engine.metrics.ops import MetricsOps
 from traust_engine.portfolio.ops import PortfolioOps
 from traust_engine.registry.ops import ModelsOps
@@ -77,7 +76,3 @@ class HarnessEngine:
     @cached_property
     def toolchain(self) -> ToolchainOps:
         return ToolchainOps(self._ctx)
-
-    @cached_property
-    def impact(self) -> ImpactOps:
-        return ImpactOps(self._ctx)
