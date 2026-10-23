@@ -103,7 +103,7 @@ class CheckovProvider:
     def _scan(self, workspace: Path, version: str) -> CheckovScan:
         resolved = workspace.resolve()
         files = list(_first_party(resolved))
-        inventory = IacInventory.count(files, lambda p: _head(resolved / p))
+        inventory = IacInventory.count(files, lambda p: _leading_text(resolved / p))
         observed: dict[str, Any] = {
             "target": resolved.name,
             "version": version,
@@ -283,7 +283,7 @@ def _containerfiles(files: Sequence[PurePosixPath]) -> list[PurePosixPath]:
     )
 
 
-def _head(path: Path) -> str:
+def _leading_text(path: Path) -> str:
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
             return fh.read(_YAML_READ_CAP)
