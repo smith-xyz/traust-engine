@@ -13,6 +13,7 @@ All notable changes to traust-engine are documented here.
   `traust_engine.osv.ranges`:
   - `spans()` reads every introduced/fixed pair and `last_affected`
     ending, and skips GIT ranges.
+  - `version_key()` gives a comparable key for one ecosystem's versions.
   - `fixed_for()` picks the lowest fix above the installed version that no
     span marks affected again. It prefers the fix of the span covering the
     installed version, and returns None when there is no fix above it.

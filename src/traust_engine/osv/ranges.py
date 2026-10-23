@@ -126,6 +126,11 @@ class _Order:
         return True
 
 
+def version_key(version: str | None, ecosystem: str | None) -> tuple[int, ...] | None:
+    """A comparable key for one of an OSV ecosystem's versions, or None if it can't be parsed."""
+    return _Order(ecosystem).key(version)
+
+
 def containing_span(
     vuln: dict,
     name: str,

@@ -1,6 +1,13 @@
 """OSV affected spans and the fix for one installed version."""
 
-from traust_engine.osv.ranges import Span, containing_span, fixed_for, range_evidence, spans
+from traust_engine.osv.ranges import (
+    Span,
+    containing_span,
+    fixed_for,
+    range_evidence,
+    spans,
+    version_key,
+)
 
 
 def _vuln(*ranges, name="example-lib", ecosystem="Go", references=None):
@@ -158,3 +165,9 @@ def test_range_evidence_keeps_ranges_and_fix_references():
         ],
         "fix_references": ["https://example.com/lib/commit/abc123"],
     }
+
+
+def test_version_key_orders_within_an_ecosystem():
+    assert version_key("v1.10.0", "Go") > version_key("1.9.3", "Go")
+    assert version_key("1.2.0", "PyPI") == version_key("1.2", "PyPI")
+    assert version_key("latest", "Go") is None
