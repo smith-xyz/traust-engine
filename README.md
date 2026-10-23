@@ -22,6 +22,14 @@ typed bridge, and unknown severity or undeclared top-level fields are refused.
 Final artifact admission goes through core's `AdapterResultArtifact` and
 `ArtifactPublisher`; sparse scanner claims are not padded into audit findings.
 
+**OPEN: actual Gitleaks scan-to-artifact schema conformance.** Nonempty native
+results still contain `cwes=[]` and `remediation=""`; the referenced report
+finding requires at least one CWE and remediation of at least ten characters.
+`tests/test_native_adapter_artifact.py` exercises the real binary directly into
+`AdapterResultArtifact.from_document` without completing the finding by hand.
+Its acceptance assertion currently fails. A valid hand-completed fixture and
+correct refusal of incomplete data do not satisfy this producer gate.
+
 Rule packs ship under `data/secure-code-audit/` (`opengrep-rules/`,
 `gitleaks-rules/`). This library ships **no configuration files and never loads
 config itself — it is a pure consumer.** A caller builds the context once

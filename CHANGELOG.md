@@ -9,6 +9,10 @@ All notable changes to traust-engine are documented here.
 - Reject explicit unknown severity and undeclared finding fields instead of
   silently relabelling or discarding them; retain valid Grype package locations.
 - Consume the finding DTO and atomic scanner-intake fixes through core.
+- **Known open:** actual nonempty Gitleaks output still fails adapter-result
+  artifact admission on required CWE/remediation constraints. Add the real
+  scan-to-artifact acceptance regression; do not count the completed-fixture
+  publication test as native scanner conformance.
 
 ## [0.38.1]
 
