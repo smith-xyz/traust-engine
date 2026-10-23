@@ -36,7 +36,7 @@ gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
 dev = ["fsspec>=2024.2", "pytest>=9.1.1", "ruff>=0.6", "vulture>=2.16"]
 
 [tool.uv.sources]
-traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "e74ff093764d03aa233db62e93c51a548810cb71" }
+traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "600f395037dfc68ac48ccaf3c78a01b14f7ae79c" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/traust_engine"]

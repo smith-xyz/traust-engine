@@ -1997,7 +1997,7 @@ wheels = [
 [[package]]
 name = "traust-contracts"
 version = "0.0.0"
-source = { git = "https://github.com/traust-security/traust-contracts.git?rev=2c68180ca1cda6216c52a67a6f8dafe358898e01#2c68180ca1cda6216c52a67a6f8dafe358898e01" }
+source = { git = "https://github.com/traust-security/traust-contracts.git?rev=237ec5060ec3514aa52d2bee8b8568be6dfa28bc#237ec5060ec3514aa52d2bee8b8568be6dfa28bc" }
 dependencies = [
     { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pydantic" },
@@ -2007,7 +2007,7 @@ dependencies = [
 [[package]]
 name = "traust-core"
 version = "0.1.0"
-source = { git = "https://github.com/traust-security/traust-core.git?rev=e74ff093764d03aa233db62e93c51a548810cb71#e74ff093764d03aa233db62e93c51a548810cb71" }
+source = { git = "https://github.com/traust-security/traust-core.git?rev=600f395037dfc68ac48ccaf3c78a01b14f7ae79c#600f395037dfc68ac48ccaf3c78a01b14f7ae79c" }
 dependencies = [
     { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pydantic" },
@@ -2072,7 +2072,7 @@ requires-dist = [
     { name = "referencing" },
     { name = "s3fs", marker = "extra == 's3'", specifier = ">=2024.2" },
     { name = "sigstore", marker = "extra == 'signing'", specifier = ">=4.0,<5.0" },
-    { name = "traust-core", git = "https://github.com/traust-security/traust-core.git?rev=e74ff093764d03aa233db62e93c51a548810cb71" },
+    { name = "traust-core", git = "https://github.com/traust-security/traust-core.git?rev=600f395037dfc68ac48ccaf3c78a01b14f7ae79c" },
     { name = "tree-sitter", marker = "extra == 'graph'" },
     { name = "tree-sitter-go", marker = "extra == 'graph'" },
     { name = "tree-sitter-javascript", marker = "extra == 'graph'" },
