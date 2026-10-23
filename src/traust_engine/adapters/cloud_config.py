@@ -35,10 +35,8 @@ CHECKOV_TIMEOUT = 1800.0
 PROBE_TIMEOUT = 60.0  # version probes, git HEAD, and one `bicep build`
 # The `bicep` CLI is installed by hand (docs: requirements); verify the download against the
 # sha256 vetted for its platform. Intake row: docs/external-dependencies.md (MIT, Azure/bicep).
+# bicep-osx-arm64: 59072cc82da704ab45d6bb11133da15b169795e42ef585dedc73d98e19fcf1be
 BICEP_VERSION = "0.45.15"
-BICEP_SHA256 = {
-    "bicep-osx-arm64": "59072cc82da704ab45d6bb11133da15b169795e42ef585dedc73d98e19fcf1be",
-}
 # Offline always: no policy downloads, no platform key, gitleaks is the one secret scanner.
 _OFFLINE = ("--output", "json", "--skip-download", "--compact")
 # Core's IacInventory applies the same skip rule; pruning here only spares the walk.
@@ -76,7 +74,9 @@ class CheckovProvider:
         workspace = request.workspace
         if not workspace.is_dir():
             raise ValidationError(f"checkov: workspace is not a directory: {workspace}")
-        facts = CloudConfigFacts.of(self._scan(workspace, self._version()))
+        reported = self._version()
+        require_checkov(reported)  # before the scan: another checkov never touches the checkout
+        facts = CloudConfigFacts.of(self._scan(workspace, reported))
         return Result(
             facts,
             Acquisition(
@@ -198,7 +198,12 @@ class CheckovProvider:
                     f"v{BICEP_VERSION} --no-restore; likely external registry modules — fetched "
                     "by design never); files stay NOT ASSESSED"
                 )
-            arm, _ = self._run_checkov(Path(tmp), "--framework", "arm")
+            arm, error = self._run_checkov(Path(tmp), "--framework", "arm")
+            if error is not None:
+                return _note(
+                    f"{len(ok)}/{len(failures)} parse-failed .bicep file(s) transpiled but the "
+                    f"arm re-scan failed: {error}; files stay NOT ASSESSED"
+                )
         note = (
             f"{len(ok)}/{len(failures)} parse-failed .bicep file(s) transpiled with the pinned "
             f"bicep CLI v{BICEP_VERSION} (--no-restore, offline) and re-scanned via the arm "

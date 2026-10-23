@@ -66,7 +66,9 @@ class Tools(ProcessRunner):
         version: Answer = b"3.3.6\n",
         head: Answer = HEAD_OUT,
         bicep: Answer = b"Bicep CLI version 0.45.15 (abc)\n",
-        build: Callable[[Path], bool] = lambda dst: dst.write_text("{}") is not None,
+        build: Callable[[Path], bool | BaseException] = lambda dst: (
+            dst.write_text("{}") is not None
+        ),
         arm: Callable[[Path], Answer] = lambda d: b"[]",
     ) -> None:
         super().__init__(())
@@ -83,8 +85,11 @@ class Tools(ProcessRunner):
         elif argv[1:] == ["--version"]:
             answer = self.version if argv[0] == "checkov" else self.bicep
         elif argv[1] == "build":
+            built = self.build(Path(argv[argv.index("--outfile") + 1]))
             answer = (
-                b"" if self.build(Path(argv[argv.index("--outfile") + 1])) else result(argv, rc=1)
+                built
+                if isinstance(built, BaseException)
+                else (b"" if built else result(argv, rc=1))
             )
         else:
             directory = Path(argv[argv.index("--directory") + 1])
@@ -489,10 +494,25 @@ def test_a_rejected_bicep_is_transpiled_offline_rescanned_as_arm_and_cites_its_s
         (None, True, "is not installed — transpile fallback unavailable"),
         (b"Bicep CLI version 0.30.0\n", True, "is not installed — transpile fallback unavailable"),
         (b"Bicep CLI version 0.45.15\n", False, "0/1 parse-failed .bicep file(s) transpiled"),
+        (
+            failed_to_run(subprocess.TimeoutExpired("bicep", 60)),
+            True,
+            "is not installed — transpile fallback unavailable",
+        ),
+        (
+            b"Bicep CLI version 0.45.15\n",
+            failed_to_run(subprocess.TimeoutExpired("bicep", 60)),
+            "0/1 parse-failed .bicep file(s) transpiled",
+        ),
+        (
+            b"Bicep CLI version 0.45.15\n",
+            failed_to_run(FileNotFoundError("bicep")),
+            "0/1 parse-failed .bicep file(s) transpiled",
+        ),
     ],
 )
 def test_a_bicep_the_fallback_cannot_recover_stays_not_assessed(
-    tmp_path: Path, bicep: bytes | None, build: bool, note: str
+    tmp_path: Path, bicep: Answer | None, build: bool | BaseException, note: str
 ) -> None:
     target, cli = bicep_checkout(tmp_path)
     tools = Tools(bicep_scan, bicep=bicep or b"", build=lambda dst: build)
@@ -519,6 +539,7 @@ def test_a_checkout_without_rejected_bicep_never_looks_for_the_cli(tmp_path: Pat
         ),
         (bicep_block("/repo/x.bicep", "/repo/x.bicep"), ("", "/repo"), ["/x.bicep"]),
         ([bicep_block()], (), []),
+        (bicep_block("/elsewhere/y.bicep"), ("/repo",), ["/elsewhere/y.bicep"]),
         (["not a block", {"results": None}], (), []),
     ],
 )
@@ -526,3 +547,102 @@ def test_parse_failures_are_bicep_only_and_checkout_relative(
     parsed: Any, strip: tuple[str, ...], want: list[str]
 ) -> None:
     assert _bicep_parse_failures(parsed, strip) == want
+
+
+# fix-forward (XWING-2440): pin before the scan, loud arm re-scan failures, bicep edges
+
+
+def test_another_checkov_version_never_scans_the_checkout(tmp_path: Path) -> None:
+    tools = Tools(version=b"3.4.0\n")
+    with pytest.raises(ConfigError, match=r"pinned 3\.3\.6, found: 3\.4\.0"):
+        acquire(tools, checkout(tmp_path))
+    assert tools.scans() == []
+    assert [c for c in tools.calls if c[0] != "checkov"] == []  # no git, no bicep either
+
+
+@pytest.mark.parametrize(
+    ("arm", "error"),
+    [
+        (failed_to_run(subprocess.TimeoutExpired("checkov", 1800)), "timeout after 1800s"),
+        (failed_to_run(FileNotFoundError("checkov")), "checkov not on PATH"),
+        (result(["checkov"], rc=1, stderr=b"arm: kaput\n"), "arm: kaput"),
+        (b"", "exit 0, no output"),
+    ],
+)
+def test_a_failed_arm_rescan_is_a_visible_note_and_recovers_nothing(
+    tmp_path: Path, arm: Answer, error: str
+) -> None:
+    target, cli = bicep_checkout(tmp_path)
+    tools = Tools(bicep_scan, arm=lambda d: arm)
+    facts = acquire(tools, target, [cli])
+    assert facts.facts == ()
+    assert facts.notes["bicep_transpile_fallback"] == (
+        f"1/1 parse-failed .bicep file(s) transpiled but the arm re-scan failed: {error}; "
+        "files stay NOT ASSESSED"
+    )
+    assert parse_gap(facts) == "myrepo: 2 file(s) failed to parse — those files are not assessed"
+    assert len(tools.scans()) == 2  # the re-scan was attempted
+
+
+def test_a_partial_transpile_names_what_stays_unparsed(tmp_path: Path) -> None:
+    target, cli = bicep_checkout(tmp_path)
+
+    def scan(directory: Path) -> bytes:
+        # ghost.bicep is reported but is not a file in the checkout: never transpiled
+        return json.dumps(
+            [bicep_block(f"{directory}/infra/kv.bicep", f"{directory}/infra/ghost.bicep")]
+        ).encode()
+
+    tools = Tools(scan, arm=arm_output)
+    facts = acquire(tools, target, [cli])
+    note = facts.notes["bicep_transpile_fallback"]
+    assert note.startswith("1/2 parse-failed .bicep")
+    assert note.endswith("; still unparsed (stay NOT ASSESSED): /infra/ghost.bicep")
+    assert [c[2] for c in tools.calls if c[1:2] == ["build"]] == [
+        str(target.resolve() / "infra" / "kv.bicep")
+    ]
+    assert "(1 .bicep of them transpile-recovered" in parse_gap(facts)
+
+
+class Versions(Tools):
+    """Each bicep candidate answers `--version` for itself."""
+
+    def __init__(self, versions: dict[str, Answer]) -> None:
+        super().__init__()
+        self.versions = versions
+
+    def run(self, argv: Sequence[str], **kw: Any) -> ProcessResult:
+        if list(argv[1:]) == ["--version"] and argv[0] in self.versions:
+            self.bicep = self.versions[argv[0]]
+        return super().run(argv, **kw)
+
+
+def test_the_first_pinned_bicep_file_wins(tmp_path: Path) -> None:
+    missing, old, pinned, later = (tmp_path / n for n in ("missing", "old", "pinned", "later"))
+    (tmp_path / "missing").mkdir()  # a directory, not a file: skipped unprobed
+    for cand in (old, pinned, later):
+        cand.write_text("")
+    tools = Versions(
+        {
+            str(old): b"Bicep CLI version 0.30.0\n",
+            str(pinned): b"Bicep CLI version 0.45.15\n",
+            str(later): b"Bicep CLI version 0.45.15\n",
+        }
+    )
+    assert provider(tools, [missing, old, pinned, later])._find_bicep() == pinned
+    assert [c[0] for c in tools.calls] == [str(old), str(pinned)]
+
+
+def test_the_probe_runner_allows_checkov_git_bicep_and_each_candidate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CCA_BICEP", str(tmp_path / "my-bicep-0.45"))
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    ctx = Context(Config(home=tmp_path))
+    register_checkov(ctx)
+    built = ctx.tools.get("checkov")
+    assert isinstance(built, CheckovProvider)
+    assert built._probe._allowed >= {"checkov", "git", "bicep", "my-bicep-0.45"}
+    assert built._checkov._allowed == {"checkov"}
+    for cand in built._bicep:
+        built._probe._validate([str(cand), "--version"])  # raises when not allowed
