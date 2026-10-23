@@ -106,6 +106,38 @@ VULN = {
 }
 
 
+def test_lookup_fix_follows_the_installed_span():
+    two_spans = {
+        "id": "GHSA-two",
+        "affected": [
+            {
+                "package": {"name": "lodash", "ecosystem": "npm"},
+                "ranges": [
+                    {
+                        "type": "SEMVER",
+                        "events": [
+                            {"introduced": "0"},
+                            {"fixed": "3.10.2"},
+                            {"introduced": "4.0.0"},
+                            {"fixed": "4.17.21"},
+                        ],
+                    }
+                ],
+            }
+        ],
+        "references": [{"type": "FIX", "url": "https://example.com/fix"}],
+    }
+    fake = FakeClient(
+        {Query("npm", "lodash", "4.17.15"): ["GHSA-two"]}, details={"GHSA-two": two_spans}
+    )
+    candidates, _ = osv.lookup(PKGS, fake)
+    (c,) = candidates
+    # the first fixed event (3.10.2) is below the installed 4.17.15
+    assert c["fixed_version"] == "4.17.21"
+    assert c["osv_ranges"] == two_spans["affected"][0]["ranges"]
+    assert c["fix_references"] == ["https://example.com/fix"]
+
+
 def test_lookup_builds_candidates():
     fake = FakeClient(
         {Query("PyPI", "requests", "2.19.0"): ["GHSA-x84v"]}, details={"GHSA-x84v": VULN}

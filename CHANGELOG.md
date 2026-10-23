@@ -2,6 +2,32 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.40.0]
+
+- **Fix: the OSV fixed version now depends on the installed version.**
+  `adapters.osv.fixed_version` returned the first `fixed` event in the
+  record and never looked at the installed version. A record with several
+  affected spans (for example, below 1.5.0, and from 2.0.0 to 2.3.0)
+  therefore told a 2.1.0 install to "upgrade" to 1.5.0. It could also
+  return a GIT commit hash as the version. The fix comes from the new
+  `traust_engine.osv.ranges`:
+  - `spans()` reads every introduced/fixed pair and `last_affected`
+    ending, and skips GIT ranges.
+  - `fixed_for()` picks the lowest fix above the installed version that no
+    span marks affected again. It prefers the fix of the span covering the
+    installed version, and returns None when there is no fix above it.
+  The API adapter, the osv-scanner adapter and the SBOM adapter all pass
+  the installed version. When a version can't be ordered, the old first-fix
+  answer is kept.
+- **New: candidates carry the record's range evidence.** Each OSV candidate
+  gains two fields: `osv_ranges` (the package's ranges as stated: type,
+  repo, events) and `fix_references` (the record's `FIX` reference URLs).
+  These are inputs for checking applicability against code later. They
+  don't change any verdict.
+- `parse_version` and `parse_semver` moved to `traust_engine._util.versions`
+  so the OSV package can use them without importing the impact analyzer.
+  `impact.analyzer` still exports both.
+
 ## [0.39.0]
 
 - **New: LLM-application rule pack (plan step D3) for Python, TypeScript

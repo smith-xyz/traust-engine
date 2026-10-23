@@ -47,6 +47,7 @@ from traust_engine.adapters._contract_bridge import (
 )
 from traust_engine.assets import harness_version as engine_harness_version
 from traust_engine.osv import OsvClient, Query, max_score
+from traust_engine.osv.ranges import fixed_for, range_evidence
 from traust_engine.portfolio import parsers as manifest_parsers
 from traust_engine.portfolio.graph import parse_gomod
 
@@ -68,19 +69,9 @@ def repo_head(repo):
         return None
 
 
-def fixed_version(vuln: dict, pkg_name: str, ecosystem: str):
-    """Best-effort fixed version for pkg from the OSV affected ranges."""
-    for aff in vuln.get("affected") or []:
-        p = aff.get("package") or {}
-        if p.get("name") != pkg_name:
-            continue
-        if ecosystem and p.get("ecosystem") and p["ecosystem"] != ecosystem:
-            continue
-        for rng in aff.get("ranges") or []:
-            for ev in rng.get("events") or []:
-                if ev.get("fixed"):
-                    return ev["fixed"]
-    return None
+def fixed_version(vuln: dict, pkg_name: str, ecosystem: str, installed: str | None = None):
+    """The fixed version that remediates ``installed``, from the OSV affected ranges."""
+    return fixed_for(vuln, pkg_name, ecosystem, installed)
 
 
 def parse_output(doc: dict, repo: Path) -> list[dict]:
@@ -116,7 +107,8 @@ def parse_output(doc: dict, repo: Path) -> list[dict]:
                         "ecosystem": eco,
                         "package": name,
                         "found_version": ver,
-                        "fixed_version": fixed_version(vuln, name, eco),
+                        "fixed_version": fixed_version(vuln, name, eco, ver),
+                        **range_evidence(vuln, name, eco),
                         "max_severity": sev_by_group.get(vid),
                         "evidence": "dependency_declared",
                         "sources": [],
@@ -756,7 +748,8 @@ def lookup(
                     "ecosystem": eco,
                     "package": name,
                     "found_version": version,
-                    "fixed_version": fixed_version(vuln, name, eco) if vuln else None,
+                    "fixed_version": fixed_version(vuln, name, eco, version) if vuln else None,
+                    **range_evidence(vuln, name, eco),
                     "max_severity": sev,
                     "severity_basis": basis,
                     "evidence": "dependency_declared",
