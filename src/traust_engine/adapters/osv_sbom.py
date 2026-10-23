@@ -41,6 +41,7 @@ from urllib.parse import unquote
 
 from traust_engine.adapters.osv import _failed_lookup, fixed_version, lookup
 from traust_engine.osv import OsvClient, Query
+from traust_engine.osv.ranges import range_evidence
 
 # purl type -> OSV ecosystem
 PURL_ECOSYSTEM = {
@@ -380,7 +381,8 @@ def parse_offline(doc: dict, packages: dict[tuple[str, str, str], dict]) -> list
                         "ecosystem": eco,
                         "package": name,
                         "found_version": ver,
-                        "fixed_version": fixed_version(vuln, pkg.get("name") or name, eco),
+                        "fixed_version": fixed_version(vuln, pkg.get("name") or name, eco, ver),
+                        **range_evidence(vuln, pkg.get("name") or name, eco),
                         "max_severity": groups.get(vid),
                         "severity_basis": "osv-scanner",
                         "evidence": "dependency_declared",
