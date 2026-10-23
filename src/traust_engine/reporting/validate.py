@@ -1559,7 +1559,12 @@ def validate_report(
             cross_validate_threat_model(report, result)
         elif any(
             family in sid
-            for family in ("refuted-register", "operator-priv-profile", "pqc-readiness")
+            for family in (
+                "refuted-register",
+                "operator-priv-profile",
+                "pqc-readiness",
+                "adapter-result",
+            )
         ):
             # These artifacts use their own schema, not audit-report checks.
             pass
@@ -1567,8 +1572,7 @@ def validate_report(
             cross_validate(report, result)
 
     sid = schema.get("$id", "")
-    # Schemas whose findings are not code-audit findings and so carry no
-    # cross-scan fingerprint.
+    # These artifact families do not use authored audit-report identity checks.
     _non_audit = (
         "validation",
         "remediation",
@@ -1585,6 +1589,7 @@ def validate_report(
         "refuted-register",
         "operator-priv-profile",
         "pqc-readiness",
+        "adapter-result",
     )
     # These checks read findings and metadata directly. On a document that
     # is not report-shaped they would raise and abort a whole directory

@@ -2,6 +2,15 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.38.3]
+
+- Close native scan-to-artifact admission by using the adapter-specific scanner
+  observation contract; unknown CWE/remediation stay unreported rather than
+  invented. Authored report findings remain strict.
+- Keep adapter results out of audit-only report cross-checks. Exercise real
+  bundled Gitleaks observations through artifact publication and reload without
+  creating canonical findings or verdicts.
+
 ## [0.38.2]
 
 - Keep scanner tool names and native fingerprints out of finding origin and
