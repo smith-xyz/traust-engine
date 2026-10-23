@@ -40,6 +40,7 @@ class TickReport(Model):
     unrouted: int = 0
     stale: dict[AssetName, int] = pydantic.Field(default_factory=dict)
     overdue: dict[AssetName, int] = pydantic.Field(default_factory=dict)
+    unrunnable: tuple[AssetName, ...] = ()
 
 
 class Controller(Generic[S]):
@@ -62,12 +63,15 @@ class Controller(Generic[S]):
 
     def tick(self, repositories: Collection[UUID]) -> TickReport:
         now = self._clock.now()
-        routed, unrouted = self._route(now)
+        unrunnable = self._pack.unrunnable()
+        if unrunnable:
+            log.warning("not planned, no run or model.role: %s", ", ".join(unrunnable))
+        routed, unrouted = self._route(now, unrunnable)
         planned, stale = 0, {}
         for name in self._pack.topo_order():
             spec = self._pack.assets[name]
             every = spec.trigger.every
-            if every is None:
+            if every is None or name in unrunnable:
                 continue
             subjects: Collection[UUID | None] = repositories if spec.partitions else (None,)
             busy = self._ops.subjects(name, OPEN_ORDER_STATES) | self._ops.subjects(
@@ -88,17 +92,25 @@ class Controller(Generic[S]):
                 planned += 1
         for name, count in stale.items():
             log.warning("%s: %d subjects wait on stale upstreams; not planned", name, count)
-        overdue = self._overdue(repositories, now)
+        overdue = self._overdue(repositories, now, unrunnable)
         log.info("tick planned %d orders, routed %d repositories", planned, routed)
         return TickReport(
-            planned=planned, routed=routed, unrouted=unrouted, stale=stale, overdue=overdue
+            planned=planned,
+            routed=routed,
+            unrouted=unrouted,
+            stale=stale,
+            overdue=overdue,
+            unrunnable=unrunnable,
         )
 
-    def _overdue(self, repositories: Collection[UUID], now: datetime) -> dict[AssetName, int]:
-        """Subjects past `freshness.fail` since their last materialization (or never made)."""
+    def _overdue(
+        self, repositories: Collection[UUID], now: datetime, unrunnable: Collection[AssetName]
+    ) -> dict[AssetName, int]:
+        """Subjects past `freshness.fail` since their last materialization (or never made);
+        unrunnable assets are reported as such instead."""
         overdue = {}
         for name, spec in self._pack.assets.items():
-            if spec.freshness.fail is None:
+            if spec.freshness.fail is None or name in unrunnable:
                 continue
             subjects = set(repositories) if spec.partitions else {None}
             fresh = self._ops.subjects(name, MATERIALIZED, now - spec.freshness.fail)
@@ -107,7 +119,7 @@ class Controller(Generic[S]):
                 log.warning("%s: %d subjects past freshness.fail", name, count)
         return overdue
 
-    def _route(self, now: datetime) -> tuple[int, int]:
+    def _route(self, now: datetime, unrunnable: Collection[AssetName]) -> tuple[int, int]:
         """Re-route only repositories whose `route_on` asset materialized since the last tick."""
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
@@ -124,8 +136,9 @@ class Controller(Generic[S]):
                 continue
             # NEED(feed): injected events and refusals come from the feed once it lands.
             route = self._router.route(state, (), ())
-            if route.lane is not None:
-                asset = self._pack.asset_for_lane(route.lane)
+            if route.lane is not None and (
+                (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable
+            ):
                 request = OrderRequest(
                     asset=asset,
                     priority=route.priority,
