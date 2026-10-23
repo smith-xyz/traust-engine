@@ -126,3 +126,17 @@ def test_grype_package_locations_survive_conversion():
     result = build_adapter_result("synthetic-repository", "grype", grype._parse_matches(raw))
     assert result.findings[0].locations[0].path == "usr/lib/example.so"
     assert result.metadata.tool == "grype"
+
+
+@pytest.mark.parametrize("severity", ["Unknown", "urgent"])
+def test_native_unknown_scanner_severity_cannot_be_relabelled_as_low(severity):
+    raw = {
+        "matches": [
+            {
+                "vulnerability": {"id": "CVE-2026-0001", "severity": severity},
+                "artifact": {"name": "fixture", "type": "rpm", "version": "1"},
+            }
+        ]
+    }
+    with pytest.raises(ValueError):
+        grype._parse_matches(raw)

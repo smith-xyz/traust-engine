@@ -13,17 +13,8 @@ def utc_now() -> str:
     return datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-_SEVERITY_MAP = {
-    "critical": Severity.CRITICAL,
-    "high": Severity.HIGH,
-    "medium": Severity.MEDIUM,
-    "low": Severity.LOW,
-    "informational": Severity.INFORMATIONAL,
-}
-
-
 def map_severity(hint: str, default: str = "low") -> Severity:
-    return _SEVERITY_MAP.get((hint or default).lower(), Severity.LOW)
+    return Severity((hint or default).lower())
 
 
 def format_lines(start: int | None, end: int | None) -> str:
