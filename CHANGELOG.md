@@ -2,6 +2,14 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.38.2]
+
+- Keep scanner tool names and native fingerprints out of finding origin and
+  domain identity fields; preserve declared classifier/dependency provenance.
+- Reject explicit unknown severity and undeclared finding fields instead of
+  silently relabelling or discarding them; retain valid Grype package locations.
+- Consume the finding DTO and atomic scanner-intake fixes through core.
+
 ## [0.38.1]
 
 - Detect live-validation, verification and PQC-readiness artifacts through the
