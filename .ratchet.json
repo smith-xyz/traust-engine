@@ -56,13 +56,6 @@
   "src/traust_engine/engine.py": {
     "contracts": 1
   },
-  "src/traust_engine/impact/analyzer.py": {
-    "contracts": 1,
-    "database": 1
-  },
-  "src/traust_engine/impact/ops.py": {
-    "contracts": 1
-  },
   "src/traust_engine/locations.py": {
     "contracts": 1,
     "state-file": 4

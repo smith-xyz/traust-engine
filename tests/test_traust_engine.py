@@ -106,7 +106,6 @@ def test_namespace_ops_are_cached_per_engine(tmp_path):
     assert h.reporting is h.reporting
     assert h.portfolio is h.portfolio
     assert h.toolchain is h.toolchain
-    assert h.impact is h.impact
 
 
 def test_models_registry_and_validate_from_context(tmp_path):
@@ -327,41 +326,3 @@ def test_safe_exec_bind_profiles_match_config_yaml_not_fallback(tmp_path):
     assert bound == expected
     assert "go-fuzz" in bound
     assert bound.keys() != safe_exec._FALLBACK_PROFILES.keys()
-
-
-def test_impact_ops_use_configured_paths(tmp_path):
-    ar = tmp_path / "analysis-results"
-    (ar / "graph").mkdir(parents=True)
-    db_path = ar / "graph" / "portfolio-graph.db"
-    db_path.write_bytes(b"")
-    explicit_db = tmp_path / "custom" / "portfolio.db"
-    explicit_db.parent.mkdir()
-    explicit_db.write_bytes(b"")
-
-    home = _home_with_progress_tracker(tmp_path, tmp_path / "pt")
-    (home / "locations.yaml").write_text(
-        yaml.safe_dump({"progress_tracker": str(tmp_path / "pt"), "analysis_results": str(ar)}),
-        encoding="utf-8",
-    )
-    h = HarnessEngine.load(config_home=home)
-
-    assert h.impact._analysis_results() == ar
-    assert h.impact.results_dir() == ar
-    assert h.impact._portfolio_graph_db() == db_path
-    assert h.impact.portfolio_graph_path() == db_path
-    assert h.impact._portfolio_graph_location() == str(ar / "graph" / "portfolio-graph.db")
-
-    (home / "locations.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "progress_tracker": str(tmp_path / "pt"),
-                "analysis_results": str(ar),
-                "portfolio_graph": str(explicit_db),
-            }
-        ),
-        encoding="utf-8",
-    )
-    h2 = HarnessEngine.load(config_home=home)
-    assert h2.impact._portfolio_graph_db() == explicit_db
-    assert h2.impact.portfolio_graph_path() == explicit_db
-    assert h2.impact._portfolio_graph_location() == str(explicit_db)
