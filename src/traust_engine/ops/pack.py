@@ -62,8 +62,15 @@ class Admission(Dto):
     quota: Quota | None = None
 
 
-# Dto: runner fields (run, params, runner, model, ...) are in the schema but not read here.
+class ModelRole(Dto):
+    role: str
+
+
+# Dto: runner fields (params, runner, ...) are in the schema but not read here; `run` and
+# `model` only say whether a runner can make the asset at all.
 class AssetSpec(Dto):
+    run: tuple[str, ...] = ()
+    model: ModelRole | None = None
     partitions: Literal["dynamic:repo"] | None = None
     deps: tuple[AssetName, ...] = ()
     priority: int = 100
@@ -95,6 +102,10 @@ class Pack(Dto):
         except CycleError as e:
             raise ValueError(f"asset deps form a cycle: {e.args[1]}") from e
         return self
+
+    def unrunnable(self) -> tuple[AssetName, ...]:
+        """Assets with neither a command nor a model role: no runner could claim their orders."""
+        return tuple(n for n, a in self.assets.items() if not a.run and a.model is None)
 
     def topo_order(self) -> list[AssetName]:
         return list(TopologicalSorter({n: a.deps for n, a in self.assets.items()}).static_order())

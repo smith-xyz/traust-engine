@@ -8,6 +8,7 @@ assets:
     runner: {labels: ["egress:public"]}
 
   repo_state:
+    run: [python3, -m, traust.cli, portfolio, observe, --repo, "{repo_url}"]
     partitions: dynamic:repo
     params: {repo_url: HttpsRepoUrl}
     trigger: {every: 24h}
@@ -17,6 +18,7 @@ assets:
     runner: {labels: ["forge:{host}"]}
 
   dependency_graph:
+    model: {role: dependency-graph}
     partitions: dynamic:repo
     deps: [repo_state, feeds_cache]
     trigger: {every: 7d}

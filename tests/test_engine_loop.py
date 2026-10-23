@@ -383,3 +383,39 @@ def test_admission_records_the_lane_verdict_and_deferred_orders_spend_nothing(
         "estimate_usd": "1.50",
         "budget_usd": "3",
     }
+
+
+def test_an_asset_no_runner_can_make_is_reported_not_planned(tmp_path: Path) -> None:
+    raw = yaml.safe_load(PACK.read_text())
+    del raw["assets"]["repo_state"]["run"]
+    raw["assets"]["repo_state"]["freshness"] = {"fail": "48h"}
+    path = tmp_path / "assets.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    repos = _repositories(services, 2)
+
+    report = Controller(Pack.load(path), services.ops, clock).tick(repos)
+
+    assert report.unrunnable == ("repo_state",)
+    assert report.planned == 1  # feeds_cache only
+    assert "repo_state" not in report.overdue
+    assert _by_asset(_orders(services, OrderState.PLANNED)) == {"feeds_cache": 1}
+
+
+def test_a_route_to_a_lane_no_runner_can_make_plans_nothing(tmp_path: Path) -> None:
+    raw = yaml.safe_load(PACK.read_text())
+    del raw["assets"]["diff_scan"]["run"]
+    path = tmp_path / "assets.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    _repositories(services, 2)
+    loop = EngineLoop(services, clock, Pack.load(path), LaneRouter(), state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+
+    report = loop.run_once()
+    assert report.tick.routed == 2
+    assert "diff_scan" not in _by_asset(_orders(services, OrderState.QUEUED, OrderState.PLANNED))
