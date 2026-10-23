@@ -128,15 +128,20 @@ class Pack(Dto):
     def load(cls, path: Path, *pins: Path) -> Pack:
         """Read and validate a pack; each of ``pins`` (e.g. `external-tools.yaml`) is recorded by
         its digest under its file name."""
+        pinned = tuple(ConfigDigest(name=p.stem, digest=_digest(p)) for p in pins)
         try:
             data = path.read_bytes()
             raw = yaml.safe_load(data)
             contracts.validate_config("pack", raw)
-            pinned = tuple(
-                ConfigDigest(name=p.stem, digest=sha256_hex(p.read_bytes())) for p in pins
-            )
             return cls.model_validate(raw).model_copy(
                 update={"digest": sha256_hex(data), "pins": pinned}
             )
         except (OSError, yaml.YAMLError, DocumentError, pydantic.ValidationError) as e:
             raise ConfigError(f"{path}: {e}") from e
+
+
+def _digest(pin: Path) -> Sha256:
+    try:
+        return sha256_hex(pin.read_bytes())
+    except OSError as e:
+        raise ConfigError(f"pinned config {pin}: {e}") from e

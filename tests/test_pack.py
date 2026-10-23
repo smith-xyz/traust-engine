@@ -102,7 +102,7 @@ def test_a_token_bucket_spends_then_refills_up_to_an_hours_worth() -> None:
 
 
 def test_a_missing_pin_file_is_a_config_error(tmp_path: Path) -> None:
-    with pytest.raises(ConfigError, match=r"external-tools\.yaml"):
+    with pytest.raises(ConfigError, match=r"pinned config .*external-tools\.yaml"):
         Pack.load(PACK, tmp_path / "external-tools.yaml")
 
 
