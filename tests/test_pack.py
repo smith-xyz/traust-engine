@@ -99,3 +99,12 @@ def test_a_token_bucket_spends_then_refills_up_to_an_hours_worth() -> None:
     assert bucket.take(T0 + timedelta(minutes=30)) is True
     assert bucket.take(T0 + timedelta(days=1)) is True
     assert bucket.tokens == 1
+
+
+def test_a_missing_pin_file_is_a_config_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"pinned config .*external-tools\.yaml"):
+        Pack.load(PACK, tmp_path / "external-tools.yaml")
+
+
+def test_a_pack_built_in_code_records_no_config() -> None:
+    assert Pack.model_validate({"pack": "p", "assets": {}}).config() == ()

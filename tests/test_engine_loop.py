@@ -419,3 +419,18 @@ def test_a_route_to_a_lane_no_runner_can_make_plans_nothing(tmp_path: Path) -> N
     report = loop.run_once()
     assert report.tick.routed == 2
     assert "diff_scan" not in _by_asset(_orders(services, OrderState.QUEUED, OrderState.PLANNED))
+
+
+def test_the_run_manifest_names_the_toolchain_pins_next_to_the_pack(tmp_path: Path) -> None:
+    pins = tmp_path / "external-tools.yaml"
+    pins.write_text("tools: {grype: {version: 0.104.0}}\n")
+    clock = Clock()
+    ctx = _context(tmp_path, clock)
+    services = ctx.services()
+    _repositories(services, 1)
+    EngineLoop(services, clock, Pack.load(PACK, pins)).run_once()
+    [order, *_] = _orders(services, OrderState.QUEUED, OrderState.PLANNED)
+    assert _manifest(ctx, order)["config"] == [
+        {"name": "pack:security", "digest": hashlib.sha256(PACK.read_bytes()).hexdigest()},
+        {"name": "external-tools", "digest": hashlib.sha256(pins.read_bytes()).hexdigest()},
+    ]
