@@ -2,6 +2,13 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.38.1]
+
+- Detect live-validation, verification and PQC-readiness artifacts through the
+  generic file/directory validation path, preserving explicit schema overrides.
+- Apply each family's schema and semantic checks without running audit-report
+  checks against readiness documents.
+
 ## [0.38.0]
 
 - **Breaking: traust-core is the hub.** traust-engine depends on traust-core
