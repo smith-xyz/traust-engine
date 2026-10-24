@@ -63,10 +63,6 @@
   "src/traust_engine/metrics/history.py": {
     "contracts": 2
   },
-  "src/traust_engine/metrics/sla.py": {
-    "contracts": 1,
-    "database": 1
-  },
   "src/traust_engine/metrics/spend.py": {
     "contracts": 1
   },
