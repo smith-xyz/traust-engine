@@ -27,7 +27,7 @@
     "contracts": 2
   },
   "src/traust_engine/adapters/ops.py": {
-    "contracts": 2
+    "contracts": 1
   },
   "src/traust_engine/adapters/osv.py": {
     "contracts": 1
