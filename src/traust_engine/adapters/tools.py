@@ -19,8 +19,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from traust_contracts import Locations, RulePackAllowlist
-from traust_contracts.models import AdapterResult
 from traust_core.v1.context import Context
 from traust_core.v1.errors import ConfigError, ServiceError, TraustError, ValidationError
 from traust_core.v1.providers.base import Acquisition, Readiness, Result, on_path
@@ -29,6 +27,7 @@ from traust_core.v1.providers.tools import DatabaseStatus, ToolRequest
 
 from traust_engine import toolchain
 from traust_engine.adapters import cloud_config, gitleaks, govulncheck, grype, opengrep, osv, yara
+from traust_engine.adapters._contract_bridge import AdapterResult  # contract types via adapters
 from traust_engine.osv import OsvClient
 
 # grype refuses a database older than this itself (traust check_drift GRYPE_DB_MAX_AGE_DAYS).
@@ -136,11 +135,11 @@ class EngineToolInspector:
 def register_tools(
     ctx: Context,
     *,
-    loc: Locations | None,
+    loc: opengrep.Locations | None,
     profile_map: Mapping[str, Any],
     pins: Mapping[str, Mapping[str, Any]],
     rule_pack: Path,
-    allowlist: RulePackAllowlist | None = None,
+    allowlist: opengrep.RulePackAllowlist | None = None,
     yara_rules: Sequence[str] = (),
     osv_client: Callable[[], OsvClient] = OsvClient,
 ) -> None:
