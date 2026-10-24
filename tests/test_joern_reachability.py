@@ -1,17 +1,12 @@
-"""Tests for traust adapters joern and the /impact-analysis
-Java joern tier (promotion-only evidence asymmetry)."""
+"""Tests for traust adapters joern (the call-site facts; the impact tier that read them is
+retired with traust_engine.impact)."""
 
 import json
 import unittest
 from pathlib import Path
 from unittest import mock
 
-import traust_engine.impact.analyzer as ria
 from traust_engine.adapters import joern as jr
-from traust_engine.impact.analyzer import (
-    RepoEvidence,
-    classify,
-)
 
 
 class TestPatterns(unittest.TestCase):
@@ -96,9 +91,8 @@ class TestWrapperSkips(unittest.TestCase):
 # in mind when changing this package: a green suite proves the installed
 # version is green, not the working tree.
 #
-# The C/C++ tier retains full coverage below (TestCPatterns,
-# TestCAnalyzerJoernGate) — it was kept on measurement: 6/6 direct calls
-# resolved against human-audited ground truth.
+# The C/C++ patterns keep their coverage below (TestCPatterns); the impact tier
+# that gated and classified them is retired with traust_engine.impact.
 
 
 class TestCPatterns(unittest.TestCase):
@@ -109,28 +103,6 @@ class TestCPatterns(unittest.TestCase):
         pats = jr.patterns_from(args)
         self.assertEqual([p["pattern"] for p in pats], ["=EVP_EncryptUpdate", "=strcpy"])
         self.assertTrue(all(p["kind"] == "symbol" for p in pats))
-
-
-class TestCAnalyzerJoernGate(unittest.TestCase):
-    def test_c_tier_gated_on_symbols_and_presence(self):
-        ctx_nosym = mock.Mock(symbols=[], module="openssl", packages=[])
-        ev = RepoEvidence(source_import_scan="imports_found")
-        with mock.patch.object(ria, "_run_joern_tier"):
-            # gate replicated: no symbols -> tier must not run (checked
-            # inside CAnalyzer.analyze; we assert the gating expression)
-            should = (
-                ev.source_import_scan == "imports_found" or ev.binary_linked_library == "linked"
-            ) and bool(ctx_nosym.symbols)
-            self.assertFalse(should)
-
-    def test_c_symbol_hit_classifies_affected(self):
-        ev = RepoEvidence(
-            evidence_level="manifest",
-            source_import_scan="imports_found",
-            joern_reachability="vulnerable_symbol_called",
-        )
-        ev.evidence_level = "symbol"
-        self.assertEqual(classify(ev), "affected")
 
 
 class TestImportDerivedPackages(unittest.TestCase):

@@ -11,7 +11,6 @@ from types import ModuleType
 _MIGRATED: dict[str, str] = {
     "corpus": "traust_engine.corpus.resolver",
     "metrics_ledger": "traust_engine.metrics.history",
-    "fetch_feeds": "traust.cli.fetch_feeds",
     "check_drift": "traust.cli.check_drift",
     "emit_doc_variance": "traust.cli.emit_doc_variance",
     "check_skill_security": "traust.cli.check_skill_security",

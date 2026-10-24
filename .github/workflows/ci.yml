@@ -38,3 +38,24 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen
       - run: make test
+
+  # Consumer fence: new direct state access fails; .ratchet.json only shrinks (checked against
+  # the base branch's). The ratchet is pinned here, independent of the runtime traust-core pin.
+  ratchet:
+    runs-on: ubuntu-latest
+    env:
+      RATCHET: traust-core @ git+https://github.com/traust-security/traust-core@cb9bf23fb8fe385c89224276c1ee6700d71e6e37
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          BASE="${{ github.base_ref || 'development' }}"
+          git fetch --depth=1 origin "$BASE"
+          REF=""
+          if git show "origin/$BASE:.ratchet.json" > /tmp/ratchet-reference.json 2>/dev/null; then
+            REF="--reference /tmp/ratchet-reference.json"
+          fi
+          uvx --from "$RATCHET" python -m traust_core.v1.checks.ratchet src \
+            --rules consumer --baseline .ratchet.json $REF
