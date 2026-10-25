@@ -27,7 +27,7 @@
     "contracts": 2
   },
   "src/traust_engine/adapters/ops.py": {
-    "contracts": 2
+    "contracts": 1
   },
   "src/traust_engine/adapters/osv.py": {
     "contracts": 1
@@ -45,10 +45,6 @@
   "src/traust_engine/compliance/scope.py": {
     "contracts": 1
   },
-  "src/traust_engine/corpus/report_store.py": {
-    "contracts": 1,
-    "database": 1
-  },
   "src/traust_engine/corpus/resolver.py": {
     "contracts": 2,
     "state-file": 2
@@ -62,10 +58,6 @@
   },
   "src/traust_engine/metrics/history.py": {
     "contracts": 2
-  },
-  "src/traust_engine/metrics/sla.py": {
-    "contracts": 1,
-    "database": 1
   },
   "src/traust_engine/metrics/spend.py": {
     "contracts": 1
