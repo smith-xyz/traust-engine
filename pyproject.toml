@@ -15,6 +15,9 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.scripts]
+traust-engine = "traust_engine.ops.cli:main"
+
 [project.optional-dependencies]
 graph = [
     "tree-sitter",
@@ -36,7 +39,7 @@ gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
 dev = ["fsspec>=2024.2", "pytest>=9.1.1", "pytest-xdist>=3", "ruff>=0.6", "vulture>=2.16"]
 
 [tool.uv.sources]
-traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "be44e61b266870e71971039cb4cbd0c84ebb0138" }
+traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "db941ab843c41d4ff9cf672afcb9292f66971c29" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/traust_engine"]
