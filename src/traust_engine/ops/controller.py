@@ -129,7 +129,8 @@ class Controller(Generic[S]):
     def _route(
         self, now: datetime, unrunnable: Collection[AssetName]
     ) -> tuple[list[OrderRequest], int, int]:
-        """Re-route only repositories whose `route_on` asset materialized since the last tick."""
+        """Re-route only repositories whose `route_on` asset materialized since the last tick; each
+        route with a lane becomes an order for that lane's asset."""
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
             return [], 0, 0
@@ -145,19 +146,19 @@ class Controller(Generic[S]):
                 unrouted += 1
                 continue
             # NEED(feed): injected events and refusals come from the feed once it lands.
-            route = self._router.route(state, (), ())
-            if route.lane is not None and (
-                (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable
-            ):
-                requests.append(
-                    OrderRequest(
-                        asset=asset,
-                        priority=route.priority,
-                        repository_id=repository_id,
-                        lane=route.lane,
-                        rule=route.reason,
+            for route in self._router.route(state, (), ()):
+                if route.lane is None:
+                    continue
+                if (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable:
+                    requests.append(
+                        OrderRequest(
+                            asset=asset,
+                            priority=route.priority,
+                            repository_id=repository_id,
+                            lane=route.lane,
+                            rule=route.reason,
+                        )
                     )
-                )
             routed += 1
         self._routed_until = now
         return requests, routed, unrouted

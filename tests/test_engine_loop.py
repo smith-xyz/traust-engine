@@ -55,10 +55,10 @@ class LaneRouter:
         self.skip = skip
         self.seen: list[UUID] = []
 
-    def route(self, state: UUID, events: object, refusals: object) -> Route:
+    def route(self, state: UUID, events: object, refusals: object) -> tuple[Route, ...]:
         self.seen.append(state)
         lane = None if state in self.skip else "diff-scan"
-        return Route(lane=lane, priority=1, reason="rule-4")  # type: ignore[arg-type]
+        return (Route(lane=lane, priority=1, reason="rule-4"),)  # type: ignore[arg-type]
 
 
 def _context(tmp_path: Path, clock: Clock, **config: Any) -> Context:
@@ -166,6 +166,40 @@ def test_a_materialized_source_unblocks_downstream_and_routes_once(tmp_path: Pat
 
     router.seen.clear()
     assert loop.run_once().tick.routed == 0  # nothing new materialized since the last tick
+
+
+class TableAndAdditiveRouter:
+    """The decision table's route, then additive lanes (lever 6, the threat-model backstop)."""
+
+    def route(self, state: UUID, events: object, refusals: object) -> tuple[Route, ...]:
+        return (
+            Route(lane="diff-scan", priority=1, reason="rule-5"),  # type: ignore[arg-type]
+            Route(lane="iac-lane", priority=2, reason="lever-6"),  # type: ignore[arg-type]
+            Route(lane=None, priority=3, reason="classified, not queued"),
+        )
+
+
+def test_every_route_with_a_lane_plans_its_lane_asset_once(tmp_path: Path) -> None:
+    raw = yaml.safe_load(PACK.read_text())
+    raw["assets"]["iac_lane"] = raw["assets"]["diff_scan"] | {"trigger": {"lanes": ["iac-lane"]}}
+    path = tmp_path / "assets.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    router = TableAndAdditiveRouter()
+    loop = EngineLoop(services, clock, Pack.load(path), router, state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+
+    report = loop.run_once()
+    routed = [o for o in _orders(services, OrderState.QUEUED) if o.lane]
+    assert report.tick.routed == 1
+    assert sorted((o.asset, o.lane, o.rule, o.repository_id) for o in routed) == [
+        ("diff_scan", "diff-scan", "rule-5", repo),
+        ("iac_lane", "iac-lane", "lever-6", repo),
+    ]
 
 
 def test_a_repository_the_router_leaves_alone_gets_no_routed_order(tmp_path: Path) -> None:
