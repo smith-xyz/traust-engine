@@ -185,6 +185,16 @@ def scan_sbom(sbom: Path | dict, client: OsvClient | None = None) -> dict:
     return {"provenance": _with_stats(provenance, stats, doc), "candidates": candidates}
 
 
+def scan(sbom: Path, *, client: OsvClient) -> dict:
+    """`scan_sbom` as a tool run: RuntimeError when the OSV API answered no package."""
+    doc = scan_sbom(sbom, client)
+    prov = doc["provenance"]
+    if prov["status"] == "failed":
+        detail = (prov.get("failure") or {}).get("detail") or "no package was answered"
+        raise RuntimeError(f"OSV API unavailable at {prov['base_url']}: {detail}")
+    return doc
+
+
 # -- dedupe against grype ------------------------------------------------------
 
 

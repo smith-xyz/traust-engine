@@ -42,6 +42,11 @@ def _tool_version(binary: str) -> str | None:
         return None
 
 
+def command(target: str, grype_bin: str = "grype", output_format: str = "json") -> list[str]:
+    """The argv a grype scan of `target` runs."""
+    return [grype_bin, target, "-o", output_format]
+
+
 def _run_grype(
     target: str,
     timeout: int,
@@ -56,7 +61,7 @@ def _run_grype(
     if freeze:
         env.update(freeze_env("grype"))
 
-    cmd = [grype_bin, target, "-o", output_format]
+    cmd = command(target, grype_bin, output_format)
     proc = subprocess.run(
         cmd,
         capture_output=True,
