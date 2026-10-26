@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from graphlib import CycleError, TopologicalSorter
 from pathlib import Path
@@ -18,6 +18,8 @@ from traust_core.v1.models.common import Sha256
 from traust_core.v1.models.integrity import sha256_hex
 from traust_core.v1.models.operations import AssetName, ConfigDigest, LaneName
 
+from traust_engine.ops.cron import Cron
+
 _DURATION = re.compile(r"^(\d+)([mhd])$")
 _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
 
@@ -31,9 +33,21 @@ def _duration(value: object) -> object:
 Duration = Annotated[timedelta, pydantic.BeforeValidator(_duration)]
 
 
+def _cron(value: object) -> object:
+    return Cron.parse(value) if isinstance(value, str) else value
+
+
 class Trigger(Dto):
     every: Duration | None = None
+    on_cron: Annotated[Cron, pydantic.BeforeValidator(_cron)] | None = None
     lanes: tuple[LaneName, ...] = ()
+
+    def since(self, now: datetime) -> datetime | None:
+        """Where the current due window starts: an attempt after it counts; None without a
+        cadence (routed or by hand)."""
+        if self.every is not None:
+            return now - self.every
+        return None if self.on_cron is None else self.on_cron.last(now)
 
 
 class Freshness(Dto):
