@@ -80,12 +80,12 @@ class Controller(Generic[S]):
         planned, stale = 0, {}
         for name in self._pack.topo_order():
             spec = self._pack.assets[name]
-            every = spec.trigger.every
-            if every is None or name in unrunnable:
+            since = spec.trigger.since(now)
+            if since is None or name in unrunnable:
                 continue
             subjects: Collection[UUID | None] = repositories if spec.partitions else (None,)
             busy = self._ops.subjects(name, OPEN_ORDER_STATES) | self._ops.subjects(
-                name, ATTEMPTED, now - every
+                name, ATTEMPTED, since
             )
             fresh = {dep: self._fresh(dep, now) for dep in spec.deps}
             for subject in subjects:
@@ -173,8 +173,7 @@ class Controller(Generic[S]):
         return requests, routed, unrouted
 
     def _fresh(self, dep: AssetName, now: datetime) -> set[UUID | None]:
-        every = self._pack.assets[dep].trigger.every
-        return self._ops.subjects(dep, MATERIALIZED, None if every is None else now - every)
+        return self._ops.subjects(dep, MATERIALIZED, self._pack.assets[dep].trigger.since(now))
 
     def _dep_subject(self, dep: AssetName, subject: UUID | None) -> UUID | None:
         return subject if self._pack.assets[dep].partitions else None
