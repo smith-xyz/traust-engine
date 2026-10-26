@@ -108,7 +108,8 @@ class GoCallgraphTool:
 
 
 def register_go_callgraph(ctx: Context) -> None:
-    """Register `GoCallgraphTool` in `ctx.tools`, keeping the Go environment it needs."""
+    """Register `GoCallgraphTool` in `ctx.tools`, keeping the Go environment it needs; like
+    Checkov it reads none of the engine's config."""
 
     def build() -> GoCallgraphTool:
         keep = (*ctx.config.process.keep_env, *GO_ENV)

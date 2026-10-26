@@ -66,9 +66,7 @@ def test_every_scanner_and_checkov_are_registered_reporting_themselves_with_the_
     tmp_path: Path,
 ) -> None:
     ctx = _ctx(tmp_path)
-    assert ctx.tools.names() == sorted(
-        [*CHECKOUT_TOOLS, *OTHER_TARGET_TOOLS, "checkov", "go-callgraph"]
-    )
+    assert ctx.tools.names() == sorted([*CHECKOUT_TOOLS, *OTHER_TARGET_TOOLS, "checkov"])
     assert all(isinstance(ctx.tools.get(n), ToolProvider) for n in ctx.tools.names())
     assert ctx.tool_inspector is None
     assert ctx.tool_floors == {
