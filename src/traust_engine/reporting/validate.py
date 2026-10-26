@@ -1041,8 +1041,9 @@ def cross_validate_vuln_findings(report: dict, result: ValidationResult):
         if summary.get(key) != actual:
             result.error(f"summary.{key}: declared {summary.get(key)}, but findings show {actual}")
 
-    # 4. Baseline bookkeeping: no baseline means nothing to dedupe against
-    if meta.get("baseline") is None:
+    # 4. Baseline bookkeeping: no baseline (audit file or core audit id), nothing to dedupe against
+    core_baseline = (meta.get("additional") or {}).get("baseline_assessment_id")
+    if meta.get("baseline") is None and core_baseline is None:
         if known:
             result.error(
                 f"{len(known)} known_findings recorded but metadata.baseline "
