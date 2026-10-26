@@ -217,3 +217,51 @@ def test_a_real_command_is_run_without_a_shell(context: Context) -> None:
     )
     done = runner.claim_once()
     assert done is not None and done.state == OrderState.DEGRADED
+
+
+FEEDS = Path(__file__).parent / "fixtures" / "config" / "feeds.yaml"
+
+
+def test_a_skill_session_with_a_command_runs_with_its_role(
+    context: Context, tmp_path: Path
+) -> None:
+    raw = yaml.safe_load(PACK.read_text())
+    raw["assets"]["dependency_graph"]["run"] = [
+        "session",
+        "--role",
+        "{role}",
+        "--repo",
+        "{repo_url}",
+    ]
+    pack = Pack.model_validate(raw)
+    assert "dependency_graph" in runnable(pack)
+    _submit(context, "dependency_graph", priority=0, repo=True)
+    commands = Commands()
+    done = Runner(
+        context.services(), pack, WORKER, timedelta(minutes=5), HOSTS, commands
+    ).claim_once()
+    assert done is not None and done.state == OrderState.SUCCEEDED
+    assert commands.seen == [
+        ["session", "--role", "dependency-graph", "--repo", "https://github.com/example/app"]
+    ]
+
+
+def test_a_feed_degraded_by_name_completes_once_the_pack_feeds_are_known(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = tmp_path / "core.yaml"
+    core.write_text(yaml.safe_dump({"home": str(tmp_path / "store")}))
+    answer = JobResult.partly({"kev": 1}).model_dump_json()
+    common = ["--core", str(core), "--pack", str(PACK)]
+
+    def claim(*extra: str) -> tuple[int, Any]:
+        _submit(Context.from_file(core), "feeds_cache")
+        monkeypatch.setattr("traust_engine.ops.runner._run", Commands(answer, 4))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            return cli.main(["claim", *common, *extra]), out.getvalue()
+
+    unknown, _ = claim()
+    assert unknown == 2  # without the registry, core refuses the feed name as a degraded key
+    rc, out = claim("--feeds", str(FEEDS))
+    assert (rc, json.loads(out)["state"]) == (4, "degraded")

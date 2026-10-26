@@ -1,5 +1,6 @@
 """A claim-once runner (design D7): lease one queued order of an asset the pack runs as a
-command, run that command with the order's params, keep the lease alive, complete the order."""
+command, run that command with the order's params, keep the lease alive, complete the order.
+A skill session is a command too: its `run` starts the session, and `{role}` is its model role."""
 
 from __future__ import annotations
 
@@ -55,7 +56,8 @@ def _by_exit(done: subprocess.CompletedProcess[str]) -> JobResult:
 
 
 def runnable(pack: Pack) -> tuple[AssetName, ...]:
-    """The assets this runner makes: those with a command (a skill session needs a launcher)."""
+    """The assets this runner makes: those with a command; a model role without one has nothing
+    to start its session with."""
     return tuple(name for name, spec in pack.assets.items() if spec.run)
 
 
@@ -105,7 +107,7 @@ class Runner:
         if spec is None:
             return ops.complete(order.id, self._worker, JobResult.failed(NOT_IN_PACK))
         try:
-            command = argv(spec, self._values(order))
+            command = argv(spec, self._values(order, spec))
         except (UnresolvedParam, ValueError, TraustError) as e:
             log.warning("order %s: %s: %s", order.id, BAD_REQUEST, e)
             return ops.complete(order.id, self._worker, JobResult.failed(BAD_REQUEST))
@@ -124,10 +126,13 @@ class Runner:
             beat.join()
         return ops.complete(order.id, self._worker, result)
 
-    def _values(self, order: RunOrder) -> dict[str, str]:
-        """What the order supplies: its id, and its repository's URL for a per-repository asset.
-        NEED(model: order params): typed params beyond the repository have no column yet."""
+    def _values(self, order: RunOrder, spec: AssetSpec) -> dict[str, str]:
+        """What the order supplies: its id, the asset's model role, and its repository's URL for
+        a per-repository asset. NEED(model: order params): typed params beyond the repository
+        have no column yet."""
         values = {"run_id": str(order.id)}
+        if spec.model is not None:
+            values["role"] = spec.model.role
         if order.repository_id is not None:
             url = self._services.portfolio.get_repository(order.repository_id).url
             values["repo_url"] = str(HttpsRepoUrl.parse(url, self._hosts))
