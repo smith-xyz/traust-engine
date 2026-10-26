@@ -13,7 +13,9 @@ from typing import Any
 
 from traust_core.v1.context import Context
 from traust_core.v1.errors import ConfigError
+from traust_core.v1.models.cloud_config import CHECKOV
 
+from traust_engine.adapters.cloud_config import register_checkov
 from traust_engine.adapters.compliance_sources import register_compliance_sources
 from traust_engine.adapters.detection_quality import register_detection_quality
 from traust_engine.adapters.fleet_fix import register_fleet_fix
@@ -70,7 +72,8 @@ def register_providers(
     # docs lookup is refused by name until one has a home.
     register_compliance_sources(ctx, {})
     register_fleet_fix(ctx)
+    register_checkov(ctx)  # needs none of the engine's config
     ctx.rule_packs = _OnFirstUse(lambda: configured().rule_packs)
     ctx.canaries = _OnFirstUse(lambda: configured().canaries)
-    for name in TOOL_NAMES:
+    for name in set(TOOL_NAMES) - {CHECKOV}:
         ctx.tools.register(name, lambda name=name: configured().tools.get(name))

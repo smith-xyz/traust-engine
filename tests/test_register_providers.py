@@ -86,6 +86,15 @@ def test_a_home_without_the_engine_config_serves_everything_but_its_providers(
         services.detection_quality.rule_packs()
 
 
+def test_checkov_runs_without_the_engine_config(tmp_path: Path) -> None:
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    loads: list[Path] = []
+    tool = _ctx(tmp_path, bare, loads).tools.get("checkov")
+    assert tool.name == "checkov"
+    assert loads == []
+
+
 def test_an_unresolvable_rule_pack_is_a_config_error(tmp_path: Path, home: Path) -> None:
     (home / "locations.yaml").write_text("opengrep_rules: s3://bucket/rules\n")
     with pytest.raises(ConfigError, match="no local path form"):
