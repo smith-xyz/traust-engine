@@ -1,5 +1,6 @@
-"""``traust-engine run|shadow|record|diff``: the continuous-ops loop on a pack, and the shadow run
-beside cron (runs recorded as orders, the engine's would-be orders, and the daily comparison)."""
+"""``traust-engine run|shadow|record|diff|claim``: the continuous-ops loop on a pack, the shadow run
+beside cron (runs recorded as orders, the engine's would-be orders, the daily comparison), and a
+claim-once runner for the pack's command assets."""
 
 from __future__ import annotations
 
@@ -21,11 +22,12 @@ from typing import Any
 from traust_core.v1.context import Context
 from traust_core.v1.errors import ConfigError, NotFoundError, TraustError
 from traust_core.v1.models.identity import Principal
-from traust_core.v1.models.operations import OrderRequest, WorkerId
+from traust_core.v1.models.operations import OrderRequest, OrderState, WorkerId
 from traust_core.v1.models.vocabulary import ActorKind
 
 from traust_engine.ops.loop import EngineLoop
 from traust_engine.ops.pack import Pack
+from traust_engine.ops.runner import Runner
 from traust_engine.ops.shadow import (
     Diff,
     Tick,
@@ -40,6 +42,12 @@ _DURATION = re.compile(r"^([1-9]\d*)([mhd])$")
 _UNITS = {"m": "minutes", "h": "hours", "d": "days"}
 # Runs before the window say when the next falls due; eight days covers daily and weekly jobs.
 LOOKBACK = timedelta(days=8)
+_EXIT = {
+    OrderState.SUCCEEDED: 0,
+    OrderState.FAILED: 1,
+    OrderState.DEGRADED: 4,
+    OrderState.REFUSED: 5,
+}
 
 
 def _duration(value: str) -> timedelta:
@@ -141,6 +149,17 @@ def _diff(args: argparse.Namespace, core: Context, pack: Pack) -> int:
     return 1 if report.differences else 0
 
 
+def _claim(args: argparse.Namespace, core: Context, pack: Pack) -> int:
+    worker = WorkerId(args.worker or f"{socket.gethostname()}:{os.getpid()}")
+    runner = Runner(core.services(), pack, worker, args.lease, core.config.forge_hosts)
+    order = runner.claim_once()
+    if order is None:
+        print(json.dumps({"claimed": None}))
+        return 0
+    print(order.model_dump_json())
+    return _EXIT[order.state]
+
+
 def _parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--core", type=Path, required=True, help="traust-core's core.yaml")
@@ -171,6 +190,13 @@ def _parser() -> argparse.ArgumentParser:
     diff.add_argument("--routes", type=Path, help="expected routing: rows of repo_url and lane")
     diff.add_argument("--window", type=_duration, default="24h", help="how far back to compare")
     diff.add_argument("--tolerance", type=_duration, default="2h", help="still the same run")
+    claim = sub.add_parser(
+        "claim", parents=[common], help="run one queued order of a command asset, then exit"
+    )
+    claim.add_argument("--worker", help="this runner's id (default: host:pid)")
+    claim.add_argument(
+        "--lease", type=_duration, default="15m", help="lease, renewed while running"
+    )
     return ap
 
 
@@ -184,7 +210,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         pack = Pack.load(args.pack, *args.pin)
         if args.op in ("run", "shadow"):
             return _passes(args, core, pack, shadow=args.op == "shadow")
-        return _record(args, core, pack) if args.op == "record" else _diff(args, core, pack)
+        ops = {"record": _record, "diff": _diff, "claim": _claim}
+        return ops[args.op](args, core, pack)
     except (OSError, TraustError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
