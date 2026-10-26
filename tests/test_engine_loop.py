@@ -55,10 +55,10 @@ class LaneRouter:
         self.skip = skip
         self.seen: list[UUID] = []
 
-    def route(self, state: UUID, events: object, refusals: object) -> Route:
+    def route(self, state: UUID, events: object, refusals: object) -> tuple[Route, ...]:
         self.seen.append(state)
         lane = None if state in self.skip else "diff-scan"
-        return Route(lane=lane, priority=1, reason="rule-4")  # type: ignore[arg-type]
+        return (Route(lane=lane, priority=1, reason="rule-4"),)  # type: ignore[arg-type]
 
 
 def _context(tmp_path: Path, clock: Clock, **config: Any) -> Context:
@@ -166,6 +166,91 @@ def test_a_materialized_source_unblocks_downstream_and_routes_once(tmp_path: Pat
 
     router.seen.clear()
     assert loop.run_once().tick.routed == 0  # nothing new materialized since the last tick
+
+
+class TableAndAdditiveRouter:
+    """The decision table's route, then additive lanes (lever 6, the threat-model backstop)."""
+
+    def route(self, state: UUID, events: object, refusals: object) -> tuple[Route, ...]:
+        return (
+            Route(lane="diff-scan", priority=1, reason="rule-5"),  # type: ignore[arg-type]
+            Route(lane="iac-lane", priority=2, reason="lever-6"),  # type: ignore[arg-type]
+            Route(lane=None, priority=3, reason="classified, not queued"),
+        )
+
+
+def _iac_pack(tmp_path: Path, **iac: Any) -> Pack:
+    """The fixture pack plus an `iac_lane` asset running the iac-lane lane; a None field is
+    dropped."""
+    raw = yaml.safe_load(PACK.read_text())
+    asset = raw["assets"]["diff_scan"] | {"trigger": {"lanes": ["iac-lane"]}} | iac
+    raw["assets"]["iac_lane"] = {k: v for k, v in asset.items() if v is not None}
+    path = tmp_path / "assets.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    return Pack.load(path)
+
+
+def _routed_once(tmp_path: Path, pack: Pack, router: Any) -> tuple[Services, Clock, UUID]:
+    """One repository whose repo_state has materialized, routed by the second tick."""
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    loop = EngineLoop(services, clock, pack, router, state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    loop.run_once()
+    return services, clock, repo
+
+
+def _routed_orders(services: Services) -> list[tuple[str, str | None, str | None, UUID | None]]:
+    orders = _orders(services, OrderState.PLANNED, OrderState.QUEUED)
+    return sorted((o.asset, o.lane, o.rule, o.repository_id) for o in orders if o.lane)
+
+
+def test_every_route_with_a_lane_plans_its_lane_asset_once(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    router = TableAndAdditiveRouter()
+    loop = EngineLoop(services, clock, _iac_pack(tmp_path), router, state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+
+    report = loop.run_once()
+    routed = [o for o in _orders(services, OrderState.QUEUED) if o.lane]
+    assert report.tick.routed == 1
+    assert sorted((o.asset, o.lane, o.rule, o.repository_id) for o in routed) == [
+        ("diff_scan", "diff-scan", "rule-5", repo),
+        ("iac_lane", "iac-lane", "lever-6", repo),
+    ]
+
+
+def test_routing_the_same_repository_again_plans_no_second_order(tmp_path: Path) -> None:
+    pack = _iac_pack(tmp_path)
+    services, clock, _ = _routed_once(tmp_path, pack, TableAndAdditiveRouter())
+    first = _routed_orders(services)
+    # A restarted engine has no routed-until mark, so it routes the same materialization again.
+    report = EngineLoop(services, clock, pack, TableAndAdditiveRouter(), lambda r: r).run_once()
+    assert report.tick.routed == 1
+    assert _routed_orders(services) == first
+    assert [o[0] for o in first] == ["diff_scan", "iac_lane"]
+
+
+def test_a_route_to_an_unrunnable_lane_plans_nothing_for_it(tmp_path: Path) -> None:
+    pack = _iac_pack(tmp_path, run=None)
+    assert "iac_lane" in pack.unrunnable()
+    services, _, repo = _routed_once(tmp_path, pack, TableAndAdditiveRouter())
+    assert _routed_orders(services) == [("diff_scan", "diff-scan", "rule-5", repo)]
+
+
+def test_a_route_to_a_lane_no_asset_runs_plans_nothing_for_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    services, _, repo = _routed_once(tmp_path, Pack.load(PACK), TableAndAdditiveRouter())
+    assert _routed_orders(services) == [("diff_scan", "diff-scan", "rule-5", repo)]
+    assert "routed lanes no pack asset runs: iac-lane" in caplog.text
 
 
 def test_a_repository_the_router_leaves_alone_gets_no_routed_order(tmp_path: Path) -> None:
