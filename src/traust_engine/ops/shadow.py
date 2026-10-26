@@ -3,6 +3,7 @@ daily comparison of the engine's shadow passes with them and with an expected ro
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -19,6 +20,7 @@ from traust_core.v1.models.operations import (
     FINISHED_ORDER_STATES,
     JobResult,
     OrderFilter,
+    OrderReason,
     OrderRequest,
     RunOrder,
     WorkerId,
@@ -27,6 +29,8 @@ from traust_core.v1.models.operations import (
 # A recorded run holds its lease for the whole command: nothing heartbeats it, and the shadow
 # pass never reaps. A cron job still running after a day is broken anyway.
 RECORD_LEASE = timedelta(hours=24)
+
+log = logging.getLogger(__name__)
 
 Key = tuple[str, UUID | None]
 
@@ -93,7 +97,8 @@ def record(
     try:
         done = subprocess.run(list(argv), capture_output=True, text=True, check=False)
     except OSError as e:
-        services.ops.complete(order.id, worker, JobResult.failed(f"could not run: {e}"))
+        log.warning("order %s: %s: could not run: %s", order.id, OrderReason.RUNNER_CRASHED, e)
+        services.ops.complete(order.id, worker, JobResult.failed(OrderReason.RUNNER_CRASHED))
         raise
     return services.ops.complete(order.id, worker, outcome(done)), done
 
@@ -109,11 +114,10 @@ def outcome(done: subprocess.CompletedProcess[str]) -> JobResult:
 
 
 def _by_exit(done: subprocess.CompletedProcess[str]) -> JobResult:
-    return (
-        JobResult.succeeded()
-        if done.returncode == 0
-        else JobResult.failed(f"exit {done.returncode}")
-    )
+    if done.returncode == 0:
+        return JobResult.succeeded()
+    log.warning("%s: %s: exit %s", done.args, OrderReason.RUNNER_CRASHED, done.returncode)
+    return JobResult.failed(OrderReason.RUNNER_CRASHED)
 
 
 def compare_runs(
