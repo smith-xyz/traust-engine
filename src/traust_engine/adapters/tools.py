@@ -29,6 +29,7 @@ from traust_engine import toolchain
 from traust_engine.adapters import (
     cloud_config,
     gitleaks,
+    go_callgraph,
     govulncheck,
     grype,
     joern,
@@ -164,8 +165,9 @@ def register_tools(
     yara_rules: Sequence[str] = (),
     osv_client: Callable[[], OsvClient] = OsvClient,
 ) -> None:
-    """Register every engine scanner in `ctx.tools` (Checkov included, through
-    `register_checkov`) and the pins' `expected` versions as `ctx.tool_floors`.
+    """Register every engine scanner in `ctx.tools` (Checkov and go-callgraph included, through
+    `register_checkov` and `register_go_callgraph`) and the pins' `expected` versions as
+    `ctx.tool_floors`.
 
     `profile_map` is the deployment's safe_exec profiles (`AdaptersOps.safe_exec_profile_map()`),
     `pins` external-tools.yaml (`ToolchainOps.pins()`), `rule_pack` / `allowlist` the opengrep
@@ -234,6 +236,7 @@ def register_tools(
     for t in tools:
         ctx.tools.register(t.name, lambda t=t: t)
     cloud_config.register_checkov(ctx)
+    go_callgraph.register_go_callgraph(ctx)
     binaries = {t.name: t._binary for t in tools}
     ctx.tool_floors.update(
         {
