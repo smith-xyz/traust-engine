@@ -62,11 +62,20 @@ class Controller(Generic[S]):
         self._routed_until: datetime | None = None
 
     def tick(self, repositories: Collection[UUID]) -> TickReport:
+        report, requests = self.due(repositories)
+        for request in requests:
+            self._ops.plan(request, ENGINE, self._pack.config())
+        log.info("tick planned %d orders, routed %d repositories", report.planned, report.routed)
+        return report
+
+    def due(self, repositories: Collection[UUID]) -> tuple[TickReport, list[OrderRequest]]:
+        """What a tick would plan (routed orders, then every due asset), writing nothing: the
+        shadow run's view of the loop."""
         now = self._clock.now()
         unrunnable = self._pack.unrunnable()
         if unrunnable:
             log.warning("not planned, no run or model.role: %s", ", ".join(unrunnable))
-        routed, unrouted = self._route(now, unrunnable)
+        requests, routed, unrouted = self._route(now, unrunnable)
         planned, stale = 0, {}
         for name in self._pack.topo_order():
             spec = self._pack.assets[name]
@@ -84,17 +93,14 @@ class Controller(Generic[S]):
                 if any(self._dep_subject(dep, subject) not in ok for dep, ok in fresh.items()):
                     stale[name] = stale.get(name, 0) + 1
                     continue
-                self._ops.plan(
-                    OrderRequest(asset=name, priority=spec.priority, repository_id=subject),
-                    ENGINE,
-                    self._pack.config(),
+                requests.append(
+                    OrderRequest(asset=name, priority=spec.priority, repository_id=subject)
                 )
                 planned += 1
         for name, count in stale.items():
             log.warning("%s: %d subjects wait on stale upstreams; not planned", name, count)
         overdue = self._overdue(repositories, now, unrunnable)
-        log.info("tick planned %d orders, routed %d repositories", planned, routed)
-        return TickReport(
+        report = TickReport(
             planned=planned,
             routed=routed,
             unrouted=unrouted,
@@ -102,6 +108,7 @@ class Controller(Generic[S]):
             overdue=overdue,
             unrunnable=unrunnable,
         )
+        return report, requests
 
     def _overdue(
         self, repositories: Collection[UUID], now: datetime, unrunnable: Collection[AssetName]
@@ -119,13 +126,16 @@ class Controller(Generic[S]):
                 log.warning("%s: %d subjects past freshness.fail", name, count)
         return overdue
 
-    def _route(self, now: datetime, unrunnable: Collection[AssetName]) -> tuple[int, int]:
+    def _route(
+        self, now: datetime, unrunnable: Collection[AssetName]
+    ) -> tuple[list[OrderRequest], int, int]:
         """Re-route only repositories whose `route_on` asset materialized since the last tick."""
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
-            return 0, 0
+            return [], 0, 0
         since = self._routed_until or now - (self._pack.assets[source].trigger.every or timedelta())
         changed = self._ops.subjects(source, MATERIALIZED, since)
+        requests: list[OrderRequest] = []
         routed = unrouted = 0
         for repository_id in (r for r in changed if r is not None):
             try:
@@ -139,17 +149,18 @@ class Controller(Generic[S]):
             if route.lane is not None and (
                 (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable
             ):
-                request = OrderRequest(
-                    asset=asset,
-                    priority=route.priority,
-                    repository_id=repository_id,
-                    lane=route.lane,
-                    rule=route.reason,
+                requests.append(
+                    OrderRequest(
+                        asset=asset,
+                        priority=route.priority,
+                        repository_id=repository_id,
+                        lane=route.lane,
+                        rule=route.reason,
+                    )
                 )
-                self._ops.plan(request, ENGINE, self._pack.config())
             routed += 1
         self._routed_until = now
-        return routed, unrouted
+        return requests, routed, unrouted
 
     def _fresh(self, dep: AssetName, now: datetime) -> set[UUID | None]:
         every = self._pack.assets[dep].trigger.every

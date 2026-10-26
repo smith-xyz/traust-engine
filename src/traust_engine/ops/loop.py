@@ -11,6 +11,7 @@ from traust_core.v1.context.context import Services
 from traust_core.v1.models.base import Model
 from traust_core.v1.models.common import every_item
 from traust_core.v1.models.inventory import RepositoryFilter
+from traust_core.v1.models.operations import OrderRequest
 from traust_core.v1.providers.clock import Clock
 from traust_core.v1.services.operations import Router
 
@@ -25,6 +26,11 @@ class PassReport(Model):
     requeued: int
     tick: TickReport
     admission: AdmissionReport
+
+
+class ShadowReport(Model):
+    tick: TickReport
+    due: tuple[OrderRequest, ...]
 
 
 class EngineLoop(Generic[S]):
@@ -45,6 +51,12 @@ class EngineLoop(Generic[S]):
         hosts = self._hosts()
         tick = self._controller.tick(hosts.keys())
         return PassReport(requeued=requeued, tick=tick, admission=self._admission.admit(hosts))
+
+    def shadow_once(self) -> ShadowReport:
+        """The orders a pass would plan, with nothing reaped, planned or admitted: run beside cron
+        (whose runs are recorded orders) until the cutover."""
+        tick, due = self._controller.due(self._hosts().keys())
+        return ShadowReport(tick=tick, due=tuple(due))
 
     def _hosts(self) -> dict[UUID, str]:
         portfolio = self._services.portfolio

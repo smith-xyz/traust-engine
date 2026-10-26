@@ -214,11 +214,15 @@ def _candidates_to_findings(candidates: list[dict]) -> list[dict[str, Any]]:
                 "severity": map_severity(_reachability_to_severity(cand["reachability"])),
                 "locations": locs,
                 "description": desc,
-                "origin": "govulncheck",
                 "category": cand["reachability"],
             }
         )
     return findings
+
+
+def command(govulncheck_bin: str = "govulncheck") -> list[str]:
+    """The argv a govulncheck scan runs, from inside the checkout."""
+    return [govulncheck_bin, "-json", "./..."]
 
 
 def _run_govulncheck(
@@ -232,7 +236,7 @@ def _run_govulncheck(
     """Execute govulncheck under safe_exec and parse its JSON stream."""
     from traust_engine._util import safe_exec
 
-    cmd = [govulncheck_bin, "-json", "./..."]
+    cmd = command(govulncheck_bin)
     extra_env = {}
     if freeze:
         from traust_engine.toolchain import freeze_env

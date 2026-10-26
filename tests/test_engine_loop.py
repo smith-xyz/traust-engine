@@ -434,3 +434,59 @@ def test_the_run_manifest_names_the_toolchain_pins_next_to_the_pack(tmp_path: Pa
         {"name": "pack:security", "digest": hashlib.sha256(PACK.read_bytes()).hexdigest()},
         {"name": "external-tools", "digest": hashlib.sha256(pins.read_bytes()).hexdigest()},
     ]
+
+
+def _runs(services: Services, asset: str, repository_id: UUID | None = None) -> None:
+    """A run beside the engine (cron, by hand): submitted, claimed and completed."""
+    services.ops.submit(OrderRequest(asset=asset, priority=1, repository_id=repository_id), ENGINE)
+    _drain(services)
+
+
+def _requests(report: Any) -> list[tuple[str, UUID | None]]:
+    return sorted(((r.asset, r.repository_id) for r in report.due), key=str)
+
+
+def test_a_shadow_pass_lists_what_a_pass_would_plan_and_writes_nothing(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    repos = _repositories(services, 3)
+    shadow = EngineLoop(services, clock, Pack.load(PACK)).shadow_once()
+
+    assert _requests(shadow) == sorted(
+        [("feeds_cache", None), *(("repo_state", r) for r in repos)], key=str
+    )
+    assert shadow.tick.planned == 4 and shadow.tick.stale == {"dependency_graph": 3}
+    assert _orders(services, *OrderState) == []
+    live = EngineLoop(services, clock, Pack.load(PACK)).run_once()
+    assert live.tick == shadow.tick
+
+
+def test_a_shadow_pass_counts_runs_made_beside_it(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    loop = EngineLoop(services, clock, Pack.load(PACK))
+    _runs(services, "feeds_cache")
+    _runs(services, "repo_state", repo)
+    clock.at += timedelta(minutes=1)
+
+    shadow = loop.shadow_once()
+    assert _requests(shadow) == [("dependency_graph", repo)]
+    clock.at += timedelta(hours=24)
+    assert ("feeds_cache", None) in _requests(loop.shadow_once())  # due again after its cadence
+
+
+def test_a_shadow_pass_lists_routed_orders_once_per_materialization(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    router = LaneRouter()
+    loop = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    _runs(services, "repo_state", repo)
+    clock.at += timedelta(minutes=1)
+
+    (routed,) = [r for r in loop.shadow_once().due if r.asset == "diff_scan"]
+    assert (routed.repository_id, routed.lane, routed.rule) == (repo, "diff-scan", "rule-4")
+    assert _orders(services, OrderState.PLANNED) == []
+    clock.at += timedelta(minutes=1)
+    assert all(r.asset != "diff_scan" for r in loop.shadow_once().due)

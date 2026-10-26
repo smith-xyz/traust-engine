@@ -610,6 +610,11 @@ def normalize(raw: dict, target: Path) -> tuple[list[dict], list[dict]]:
         owasp = meta.get("owasp") or []
         if isinstance(owasp, str):
             owasp = [owasp]
+        # OWASP Top 10 for LLM Applications IDs (llm-application rules);
+        # the audit copies them into a finding's owasp_llm_references
+        owasp_llm = meta.get("owasp_llm") or []
+        if isinstance(owasp_llm, str):
+            owasp_llm = [owasp_llm]
         path = r.get("path", "")
         try:
             rel = str(Path(path).resolve().relative_to(target))
@@ -627,6 +632,7 @@ def normalize(raw: dict, target: Path) -> tuple[list[dict], list[dict]]:
                 "message": (extra.get("message") or "")[:400],
                 "cwe": [str(c) for c in cwes],
                 "owasp": [str(o) for o in owasp],
+                "owasp_llm": [str(o) for o in owasp_llm],
                 "confidence": meta.get("confidence"),
                 "taint": "dataflow_trace" in extra,
                 "snippet": (extra.get("lines") or "")[:200],
@@ -783,7 +789,6 @@ def _facts_to_findings(facts: list[dict]) -> list[dict[str, Any]]:
                 "description": _describe(fact),
                 "evidence": evidence,
                 "category": fact["rule_id"],
-                "origin": "opengrep",
             }
         )
     return findings
@@ -800,10 +805,7 @@ def scan(
     *,
     loc: Locations | None = None,
 ) -> AdapterResult:
-    """Run opengrep scan and return typed result.
-
-    Falls back to dict if contracts not available.
-    """
+    """Run opengrep and return typed scanner observations."""
     target = target.resolve()
     try:
         pack = resolve_rule_pack_dir(rule_pack, loc)
