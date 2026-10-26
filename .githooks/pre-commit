@@ -44,5 +44,5 @@ if [ -z "$staged_py" ]; then
   exit 0
 fi
 
-uv run ruff check $staged_py
-uv run ruff format --check $staged_py
+uv run ruff check --force-exclude $staged_py
+uv run ruff format --check --force-exclude $staged_py

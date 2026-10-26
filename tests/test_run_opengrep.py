@@ -44,6 +44,17 @@ RAW = {
             },
         },
         {
+            "check_id": "rules.llm-output-to-sql",
+            "path": "/repo/ask.py",
+            "start": {"line": 5},
+            "end": {"line": 5},
+            "extra": {
+                "severity": "ERROR",
+                "message": "model output to SQL",
+                "metadata": {"cwe": ["CWE-1426", "CWE-89"], "owasp_llm": "LLM05"},
+            },
+        },
+        {
             "check_id": "rules.open-encoding",
             "path": "/repo/test/util_test.py",
             "start": {"line": 3},
@@ -62,7 +73,7 @@ RAW = {
 class TestNormalize(unittest.TestCase):
     def test_fact_shape_and_severity_mapping(self):
         facts, _errors = R.normalize(RAW, Path("/repo"))
-        self.assertEqual(len(facts), 2)
+        self.assertEqual(len(facts), 3)
         f = facts[0]
         # check_id path prefixes are stripped to the bare rule id
         self.assertEqual(f["rule_id"], "go-sqli-taint")
@@ -71,14 +82,20 @@ class TestNormalize(unittest.TestCase):
         self.assertEqual((f["start_line"], f["end_line"]), (10, 11))
         self.assertEqual(f["cwe"], ["CWE-89"])  # str normalized to list
         self.assertEqual(f["owasp"], ["A03:2021"])
+        self.assertEqual(f["owasp_llm"], [])
         self.assertTrue(f["taint"])
         self.assertFalse(f["test_path"])
 
     def test_test_path_tagged_and_info_is_low(self):
         facts, _ = R.normalize(RAW, Path("/repo"))
-        self.assertTrue(facts[1]["test_path"])
-        self.assertEqual(facts[1]["severity_hint"], "low")
-        self.assertFalse(facts[1]["taint"])
+        self.assertTrue(facts[2]["test_path"])
+        self.assertEqual(facts[2]["severity_hint"], "low")
+        self.assertFalse(facts[2]["taint"])
+
+    def test_owasp_llm_carried_and_str_normalized(self):
+        facts, _ = R.normalize(RAW, Path("/repo"))
+        self.assertEqual(facts[1]["owasp_llm"], ["LLM05"])
+        self.assertEqual(facts[1]["cwe"], ["CWE-1426", "CWE-89"])
 
     def test_bare_rule_id_strips_dotted_path_prefixes(self):
         cases = {
