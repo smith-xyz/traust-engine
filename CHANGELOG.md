@@ -2,6 +2,15 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.39.1]
+
+- Render and lint canonical threat-model mitigation effort using Core's
+  registry-backed vocabulary while retaining historical uppercase reads.
+- Preserve independent blocking in an optional trailing Markdown column;
+  render unknown size/blocking as `-`, never as a measured size or known false.
+  Keep legacy four-column mitigation tables readable and reject prose or
+  blocking sentinels masquerading as sizes.
+
 ## [0.39.0]
 
 - **LLM-application rule pack** on `development`, ported from `main`

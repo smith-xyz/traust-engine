@@ -24,6 +24,8 @@ import json
 import re
 from pathlib import Path
 
+from traust_core.v1.models.vocabulary import MitigationEffort
+
 from traust_engine.reporting import threat_rating
 
 REQUIRED_SECTIONS = [
@@ -56,7 +58,7 @@ LIKELIHOOD_ENUM = {"very_rare", "rare", "possible", "likely", "almost_certain"}
 STATUS_ENUM = {"unmitigated", "partially_mitigated", "mitigated", "risk_accepted"}
 SENSITIVITY_ENUM = {"low", "medium", "high", "critical"}
 CLOSES_CLASS_ENUM = {"yes", "partial", "no"}
-EFFORT_ENUM = {"XS", "S", "M", "L"}
+EFFORT_ENUM = {member.value for member in MitigationEffort}
 MODE_ENUM = {"interview", "bootstrap", "bootstrap-then-interview"}
 
 IMPACT_ORDER = ["existential", "critical", "high", "medium", "low"]
@@ -552,11 +554,11 @@ def lint_file(path, strict=False):
     else:
         cols, rows = parse_table(b)
         if cols is not None:
-            if cols != MITIG_COLUMNS:
+            if cols not in (MITIG_COLUMNS, [*MITIG_COLUMNS, "blocked_external"]):
                 errors.append(f"section 8 columns must be {MITIG_COLUMNS}, got {cols}")
             else:
                 for r in rows:
-                    if len(r) != 4:
+                    if len(r) != len(cols):
                         errors.append(f"section 8 row too short: {r}")
                         continue
                     for tid in re.split(r"[,;]\s*", r[1]):
@@ -569,9 +571,13 @@ def lint_file(path, strict=False):
                         errors.append(
                             f"section 8 '{r[0]}': closes_class '{r[2]}' not in {sorted(CLOSES_CLASS_ENUM)}"
                         )
-                    if r[3] not in EFFORT_ENUM:
+                    if r[3] not in EFFORT_ENUM and r[3] not in ("", "-"):
                         errors.append(
                             f"section 8 '{r[0]}': effort '{r[3]}' not in {sorted(EFFORT_ENUM)}"
+                        )
+                    if len(cols) == 5 and r[4] not in ("true", "false", "", "-"):
+                        errors.append(
+                            f"section 8 '{r[0]}': blocked_external must be true, false or unknown"
                         )
 
     # -- Section 9: Attack scenarios (optional) ---------------------------------
