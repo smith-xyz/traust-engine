@@ -182,8 +182,8 @@ def test_outcome(done: subprocess.CompletedProcess[str], want: JobResult) -> Non
 
 
 class EveryRepoToDiffScan:
-    def route(self, state: object, events: object, refusals: object) -> Route:
-        return Route(lane="diff-scan", priority=1, reason="rule-5")  # type: ignore[arg-type]
+    def route(self, state: object, events: object, refusals: object) -> tuple[Route, ...]:
+        return (Route(lane="diff-scan", priority=1, reason="rule-5"),)  # type: ignore[arg-type]
 
 
 @pytest.fixture

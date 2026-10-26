@@ -9,12 +9,13 @@ from typing import Generic, TypeVar
 from uuid import UUID
 
 import pydantic
-from traust_core.v1.errors import NotFoundError
+from traust_core.v1.errors import ConfigError, NotFoundError
 from traust_core.v1.models.base import Model
 from traust_core.v1.models.identity import Principal
 from traust_core.v1.models.operations import (
     OPEN_ORDER_STATES,
     AssetName,
+    LaneName,
     OrderRequest,
     OrderState,
 )
@@ -79,12 +80,12 @@ class Controller(Generic[S]):
         planned, stale = 0, {}
         for name in self._pack.topo_order():
             spec = self._pack.assets[name]
-            every = spec.trigger.every
-            if every is None or name in unrunnable:
+            since = spec.trigger.since(now)
+            if since is None or name in unrunnable:
                 continue
             subjects: Collection[UUID | None] = repositories if spec.partitions else (None,)
             busy = self._ops.subjects(name, OPEN_ORDER_STATES) | self._ops.subjects(
-                name, ATTEMPTED, now - every
+                name, ATTEMPTED, since
             )
             fresh = {dep: self._fresh(dep, now) for dep in spec.deps}
             for subject in subjects:
@@ -129,13 +130,15 @@ class Controller(Generic[S]):
     def _route(
         self, now: datetime, unrunnable: Collection[AssetName]
     ) -> tuple[list[OrderRequest], int, int]:
-        """Re-route only repositories whose `route_on` asset materialized since the last tick."""
+        """Re-route only repositories whose `route_on` asset materialized since the last tick; each
+        route with a lane the pack runs becomes an order for that lane's asset."""
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
             return [], 0, 0
         since = self._routed_until or now - (self._pack.assets[source].trigger.every or timedelta())
         changed = self._ops.subjects(source, MATERIALIZED, since)
         requests: list[OrderRequest] = []
+        unknown: set[LaneName] = set()
         routed = unrouted = 0
         for repository_id in (r for r in changed if r is not None):
             try:
@@ -145,26 +148,32 @@ class Controller(Generic[S]):
                 unrouted += 1
                 continue
             # NEED(feed): injected events and refusals come from the feed once it lands.
-            route = self._router.route(state, (), ())
-            if route.lane is not None and (
-                (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable
-            ):
-                requests.append(
-                    OrderRequest(
-                        asset=asset,
-                        priority=route.priority,
-                        repository_id=repository_id,
-                        lane=route.lane,
-                        rule=route.reason,
+            for route in self._router.route(state, (), ()):
+                if route.lane is None:
+                    continue
+                try:
+                    asset = self._pack.asset_for_lane(route.lane)
+                except ConfigError:
+                    unknown.add(route.lane)
+                    continue
+                if asset not in unrunnable:
+                    requests.append(
+                        OrderRequest(
+                            asset=asset,
+                            priority=route.priority,
+                            repository_id=repository_id,
+                            lane=route.lane,
+                            rule=route.reason,
+                        )
                     )
-                )
             routed += 1
+        if unknown:
+            log.warning("routed lanes no pack asset runs: %s", ", ".join(sorted(unknown)))
         self._routed_until = now
         return requests, routed, unrouted
 
     def _fresh(self, dep: AssetName, now: datetime) -> set[UUID | None]:
-        every = self._pack.assets[dep].trigger.every
-        return self._ops.subjects(dep, MATERIALIZED, None if every is None else now - every)
+        return self._ops.subjects(dep, MATERIALIZED, self._pack.assets[dep].trigger.since(now))
 
     def _dep_subject(self, dep: AssetName, subject: UUID | None) -> UUID | None:
         return subject if self._pack.assets[dep].partitions else None
