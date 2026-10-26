@@ -10,7 +10,7 @@ from typing import Generic, TypeVar
 from uuid import UUID
 
 import pydantic
-from traust_core.v1.errors import NotFoundError
+from traust_core.v1.errors import ConfigError, NotFoundError
 from traust_core.v1.models.base import Model
 from traust_core.v1.models.common import Cursor, PageRequest, encode_cursor
 from traust_core.v1.models.identity import Principal
@@ -139,12 +139,14 @@ class Controller(Generic[S]):
         self, now: datetime, unrunnable: Collection[AssetName]
     ) -> tuple[list[OrderRequest], int, int, int]:
         """Re-route repositories whose `route_on` asset materialized, or whose routed order was
-        refused, since the last tick; a route back into a lane that refused it is not planned."""
+        refused, since the last tick; each route with a lane the pack runs becomes an order for
+        that lane's asset, except a route back into a lane that refused it."""
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
             return [], 0, 0, 0
         changed, refusals = self._changes(source, now)
         requests: list[OrderRequest] = []
+        unknown: set[LaneName] = set()
         routed = unrouted = refused_again = 0
         for repository_id in changed | refusals.keys():
             try:
@@ -155,25 +157,33 @@ class Controller(Generic[S]):
                 continue
             refused = refusals.get(repository_id, [])
             # NEED(feed: injected events): an injected event is a planned order, never on the feed.
-            route = self._router.route(state, (), refused)
-            routed += 1
-            if route.lane is not None and route.lane in {r.lane for r in refused}:
-                log.warning(
-                    "not planned: %s back into %s, which refused it", repository_id, route.lane
-                )
-                refused_again += 1
-            elif route.lane is not None and (
-                (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable
-            ):
-                requests.append(
-                    OrderRequest(
-                        asset=asset,
-                        priority=route.priority,
-                        repository_id=repository_id,
-                        lane=route.lane,
-                        rule=route.reason,
+            for route in self._router.route(state, (), refused):
+                if route.lane is None:
+                    continue
+                if route.lane in {r.lane for r in refused}:
+                    log.warning(
+                        "not planned: %s back into %s, which refused it", repository_id, route.lane
                     )
-                )
+                    refused_again += 1
+                    continue
+                try:
+                    asset = self._pack.asset_for_lane(route.lane)
+                except ConfigError:
+                    unknown.add(route.lane)
+                    continue
+                if asset not in unrunnable:
+                    requests.append(
+                        OrderRequest(
+                            asset=asset,
+                            priority=route.priority,
+                            repository_id=repository_id,
+                            lane=route.lane,
+                            rule=route.reason,
+                        )
+                    )
+            routed += 1
+        if unknown:
+            log.warning("routed lanes no pack asset runs: %s", ", ".join(sorted(unknown)))
         return requests, routed, unrouted, refused_again
 
     def _changes(

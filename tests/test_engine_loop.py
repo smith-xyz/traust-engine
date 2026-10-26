@@ -58,10 +58,10 @@ class LaneRouter:
         self.skip = skip
         self.seen: list[UUID] = []
 
-    def route(self, state: UUID, events: object, refusals: object) -> Route:
+    def route(self, state: UUID, events: object, refusals: object) -> tuple[Route, ...]:
         self.seen.append(state)
         lane = None if state in self.skip else "diff-scan"
-        return Route(lane=lane, priority=1, reason="rule-4")  # type: ignore[arg-type]
+        return (Route(lane=lane, priority=1, reason="rule-4"),)  # type: ignore[arg-type]
 
 
 def _context(tmp_path: Path, clock: Clock, **config: Any) -> Context:
@@ -90,6 +90,14 @@ def _drain(services: Services, result: JobResult = SUCCEEDED) -> list[RunOrder]:
     while (order := services.ops.claim(WORKER, LEASE)) is not None:
         done.append(services.ops.complete(order.id, WORKER, result))  # type: ignore[arg-type]
     return done
+
+
+def _materialize(services: Services, asset: str, repository_id: UUID | None) -> None:
+    order = services.ops.start(
+        OrderRequest(asset=asset, priority=20, repository_id=repository_id), ENGINE, WORKER, LEASE
+    )
+    assert order.id is not None
+    services.ops.complete(order.id, WORKER, SUCCEEDED)
 
 
 def _pack(tmp_path: Path, **changes: dict[str, Any]) -> Pack:
@@ -169,6 +177,94 @@ def test_a_materialized_source_unblocks_downstream_and_routes_once(tmp_path: Pat
 
     router.seen.clear()
     assert loop.run_once().tick.routed == 0  # nothing new materialized since the last tick
+
+
+class TableAndAdditiveRouter:
+    """The decision table's route, then additive lanes (lever 6, the threat-model backstop)."""
+
+    def route(self, state: UUID, events: object, refusals: object) -> tuple[Route, ...]:
+        return (
+            Route(lane="diff-scan", priority=1, reason="rule-5"),  # type: ignore[arg-type]
+            Route(lane="iac-lane", priority=2, reason="lever-6"),  # type: ignore[arg-type]
+            Route(lane=None, priority=3, reason="classified, not queued"),
+        )
+
+
+def _iac_pack(tmp_path: Path, **iac: Any) -> Pack:
+    """The fixture pack plus an `iac_lane` asset running the iac-lane lane; a None field is
+    dropped."""
+    raw = yaml.safe_load(PACK.read_text())
+    asset = raw["assets"]["diff_scan"] | {"trigger": {"lanes": ["iac-lane"]}} | iac
+    raw["assets"]["iac_lane"] = {k: v for k, v in asset.items() if v is not None}
+    path = tmp_path / "assets.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    return Pack.load(path)
+
+
+def _routed_once(tmp_path: Path, pack: Pack, router: Any) -> tuple[Services, Clock, UUID]:
+    """One repository whose repo_state has materialized, routed by the second tick."""
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    loop = EngineLoop(services, clock, pack, router, state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    loop.run_once()
+    return services, clock, repo
+
+
+def _routed_orders(services: Services) -> list[tuple[str, str | None, str | None, UUID | None]]:
+    orders = _orders(services, OrderState.PLANNED, OrderState.QUEUED)
+    return sorted((o.asset, o.lane, o.rule, o.repository_id) for o in orders if o.lane)
+
+
+def test_every_route_with_a_lane_plans_its_lane_asset_once(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    router = TableAndAdditiveRouter()
+    loop = EngineLoop(services, clock, _iac_pack(tmp_path), router, state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+
+    report = loop.run_once()
+    routed = [o for o in _orders(services, OrderState.QUEUED) if o.lane]
+    assert report.tick.routed == 1
+    assert sorted((o.asset, o.lane, o.rule, o.repository_id) for o in routed) == [
+        ("diff_scan", "diff-scan", "rule-5", repo),
+        ("iac_lane", "iac-lane", "lever-6", repo),
+    ]
+
+
+def test_routing_the_same_repository_again_plans_no_second_order(tmp_path: Path) -> None:
+    pack = _iac_pack(tmp_path)
+    services, clock, repo = _routed_once(tmp_path, pack, TableAndAdditiveRouter())
+    first = _routed_orders(services)
+    # A restarted engine resumes after the last routed order; repo_state materializing again
+    # routes the same repository again.
+    clock.at += timedelta(minutes=1)
+    _materialize(services, "repo_state", repo)
+    report = EngineLoop(services, clock, pack, TableAndAdditiveRouter(), lambda r: r).run_once()
+    assert report.tick.routed == 1
+    assert _routed_orders(services) == first
+    assert [o[0] for o in first] == ["diff_scan", "iac_lane"]
+
+
+def test_a_route_to_an_unrunnable_lane_plans_nothing_for_it(tmp_path: Path) -> None:
+    pack = _iac_pack(tmp_path, run=None)
+    assert "iac_lane" in pack.unrunnable()
+    services, _, repo = _routed_once(tmp_path, pack, TableAndAdditiveRouter())
+    assert _routed_orders(services) == [("diff_scan", "diff-scan", "rule-5", repo)]
+
+
+def test_a_route_to_a_lane_no_asset_runs_plans_nothing_for_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    services, _, repo = _routed_once(tmp_path, Pack.load(PACK), TableAndAdditiveRouter())
+    assert _routed_orders(services) == [("diff_scan", "diff-scan", "rule-5", repo)]
+    assert "routed lanes no pack asset runs: iac-lane" in caplog.text
 
 
 def test_a_repository_the_router_leaves_alone_gets_no_routed_order(tmp_path: Path) -> None:
@@ -503,10 +599,10 @@ class RefusalRouter:
         self.lane, self.instead = lane, instead
         self.refusals: list[Refusal] = []
 
-    def route(self, state: UUID, events: object, refusals: Sequence[Refusal]) -> Route:
+    def route(self, state: UUID, events: object, refusals: Sequence[Refusal]) -> tuple[Route, ...]:
         self.refusals += refusals
         lane = self.instead if refusals and self.instead else self.lane
-        return Route(lane=lane, priority=1, reason="rule-4")  # type: ignore[arg-type]
+        return (Route(lane=lane, priority=1, reason="rule-4"),)  # type: ignore[arg-type]
 
 
 def _scans(services: Services, *states: OrderState) -> list[RunOrder]:
@@ -528,7 +624,7 @@ def _refuse_the_scan(services: Services) -> RunOrder:
     return scan
 
 
-def _routed_once(tmp_path: Path, router: RefusalRouter) -> tuple[Services, Clock, EngineLoop]:
+def _routed_loop(tmp_path: Path, router: RefusalRouter) -> tuple[Services, Clock, EngineLoop]:
     clock = Clock()
     services = _context(tmp_path, clock).services()
     _repositories(services, 1)
@@ -544,7 +640,7 @@ def test_a_refused_repository_is_re_routed_with_its_refusal_and_never_loops(
     tmp_path: Path,
 ) -> None:
     router = RefusalRouter()
-    services, _, loop = _routed_once(tmp_path, router)
+    services, _, loop = _routed_loop(tmp_path, router)
     scan = _refuse_the_scan(services)
 
     again = loop.run_once().tick
@@ -555,14 +651,7 @@ def test_a_refused_repository_is_re_routed_with_its_refusal_and_never_loops(
     assert _scans(services, *OPEN_ORDER_STATES) == []
     assert loop.run_once().tick.routed == 0  # no loop: nothing new since
 
-    observed = services.ops.start(
-        OrderRequest(asset="repo_state", priority=20, repository_id=scan.repository_id),
-        ENGINE,
-        WORKER,
-        LEASE,
-    )
-    assert observed.id is not None
-    services.ops.complete(observed.id, WORKER, SUCCEEDED)
+    _materialize(services, "repo_state", scan.repository_id)
     assert loop.run_once().tick.routed == 1
     (planned,) = _scans(services, *OPEN_ORDER_STATES)
     assert planned.lane == "diff-scan"
@@ -570,7 +659,7 @@ def test_a_refused_repository_is_re_routed_with_its_refusal_and_never_loops(
 
 def test_a_refusal_routed_into_another_lane_is_planned(tmp_path: Path) -> None:
     router = RefusalRouter(instead="diff-scan-quarterly")
-    services, _, loop = _routed_once(tmp_path, router)
+    services, _, loop = _routed_loop(tmp_path, router)
     _refuse_the_scan(services)
     assert loop.run_once().tick.refused_again == 0
     (planned,) = _scans(services, *OPEN_ORDER_STATES)
@@ -579,7 +668,7 @@ def test_a_refusal_routed_into_another_lane_is_planned(tmp_path: Path) -> None:
 
 def test_a_restart_resumes_routing_after_the_last_routed_order(tmp_path: Path) -> None:
     router = RefusalRouter()
-    services, clock, _ = _routed_once(tmp_path, router)
+    services, clock, _ = _routed_loop(tmp_path, router)
     restarted = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
     assert restarted.run_once().tick.routed == 0
 
