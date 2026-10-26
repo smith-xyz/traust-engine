@@ -43,7 +43,7 @@ class EngineLoop(Generic[S]):
         state_of: Callable[[UUID], S] | None = None,
     ) -> None:
         self._services = services
-        self._controller = Controller(pack, services.ops, clock, router, state_of)
+        self._controller = Controller(pack, services.ops, clock, router, state_of, services.feed)
         self._admission = Admission(pack, services.ops, services.spend, clock)
 
     def run_once(self) -> PassReport:

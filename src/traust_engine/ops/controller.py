@@ -3,24 +3,28 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from collections.abc import Callable, Collection
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Generic, TypeVar
 from uuid import UUID
 
 import pydantic
 from traust_core.v1.errors import NotFoundError
 from traust_core.v1.models.base import Model
+from traust_core.v1.models.common import Cursor, PageRequest, encode_cursor
 from traust_core.v1.models.identity import Principal
 from traust_core.v1.models.operations import (
     OPEN_ORDER_STATES,
     AssetName,
+    LaneName,
     OrderRequest,
     OrderState,
+    Refusal,
 )
 from traust_core.v1.models.vocabulary import ActorKind
 from traust_core.v1.providers.clock import Clock
-from traust_core.v1.services.operations import OpsService, Router
+from traust_core.v1.services.operations import FeedQuery, OpsService, Router
 
 from traust_engine.ops.pack import Pack
 
@@ -32,12 +36,14 @@ ENGINE = Principal(identity="traust-engine", kind=ActorKind.MACHINE, display="tr
 MATERIALIZED = (OrderState.SUCCEEDED, OrderState.DEGRADED)
 # A refused or failed run waits out the cadence too, so a broken asset can't spin every tick.
 ATTEMPTED = (*MATERIALIZED, OrderState.REFUSED, OrderState.FAILED)
+FEED_PAGE = 1000
 
 
 class TickReport(Model):
     planned: int = 0
     routed: int = 0
     unrouted: int = 0
+    refused_again: int = 0
     stale: dict[AssetName, int] = pydantic.Field(default_factory=dict)
     overdue: dict[AssetName, int] = pydantic.Field(default_factory=dict)
     unrunnable: tuple[AssetName, ...] = ()
@@ -51,15 +57,17 @@ class Controller(Generic[S]):
         clock: Clock,
         router: Router[S, object] | None = None,
         state_of: Callable[[UUID], S] | None = None,
+        feed: FeedQuery | None = None,
     ) -> None:
-        if (router is None) != (state_of is None):
-            raise ValueError("a router needs state_of, and state_of needs a router")
+        if (router is None) != (state_of is None) or (router is not None and feed is None):
+            raise ValueError("a router needs state_of and the feed, and state_of needs a router")
         self._pack = pack
         self._ops = ops
         self._clock = clock
         self._router = router
         self._state_of = state_of
-        self._routed_until: datetime | None = None
+        self._feed = feed
+        self._cursor: Cursor | None = None
 
     def tick(self, repositories: Collection[UUID]) -> TickReport:
         report, requests = self.due(repositories)
@@ -75,7 +83,7 @@ class Controller(Generic[S]):
         unrunnable = self._pack.unrunnable()
         if unrunnable:
             log.warning("not planned, no run or model.role: %s", ", ".join(unrunnable))
-        requests, routed, unrouted = self._route(now, unrunnable)
+        requests, routed, unrouted, refused_again = self._route(now, unrunnable)
         planned, stale = 0, {}
         for name in self._pack.topo_order():
             spec = self._pack.assets[name]
@@ -104,6 +112,7 @@ class Controller(Generic[S]):
             planned=planned,
             routed=routed,
             unrouted=unrouted,
+            refused_again=refused_again,
             stale=stale,
             overdue=overdue,
             unrunnable=unrunnable,
@@ -128,25 +137,32 @@ class Controller(Generic[S]):
 
     def _route(
         self, now: datetime, unrunnable: Collection[AssetName]
-    ) -> tuple[list[OrderRequest], int, int]:
-        """Re-route only repositories whose `route_on` asset materialized since the last tick."""
+    ) -> tuple[list[OrderRequest], int, int, int]:
+        """Re-route repositories whose `route_on` asset materialized, or whose routed order was
+        refused, since the last tick; a route back into a lane that refused it is not planned."""
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
-            return [], 0, 0
-        since = self._routed_until or now - (self._pack.assets[source].trigger.every or timedelta())
-        changed = self._ops.subjects(source, MATERIALIZED, since)
+            return [], 0, 0, 0
+        changed, refusals = self._changes(source, now)
         requests: list[OrderRequest] = []
-        routed = unrouted = 0
-        for repository_id in (r for r in changed if r is not None):
+        routed = unrouted = refused_again = 0
+        for repository_id in changed | refusals.keys():
             try:
                 state = self._state_of(repository_id)
             except NotFoundError as e:
                 log.warning("not routed: %s", e)
                 unrouted += 1
                 continue
-            # NEED(feed): injected events and refusals come from the feed once it lands.
-            route = self._router.route(state, (), ())
-            if route.lane is not None and (
+            refused = refusals.get(repository_id, [])
+            # NEED(feed: injected events): an injected event is a planned order, never on the feed.
+            route = self._router.route(state, (), refused)
+            routed += 1
+            if route.lane is not None and route.lane in {r.lane for r in refused}:
+                log.warning(
+                    "not planned: %s back into %s, which refused it", repository_id, route.lane
+                )
+                refused_again += 1
+            elif route.lane is not None and (
                 (asset := self._pack.asset_for_lane(route.lane)) not in unrunnable
             ):
                 requests.append(
@@ -158,9 +174,41 @@ class Controller(Generic[S]):
                         rule=route.reason,
                     )
                 )
-            routed += 1
-        self._routed_until = now
-        return requests, routed, unrouted
+        return requests, routed, unrouted, refused_again
+
+    def _changes(
+        self, source: AssetName, now: datetime
+    ) -> tuple[set[UUID], dict[UUID, list[Refusal]]]:
+        """Repositories whose `source` materialized, and refusals of routed orders, on the feed
+        since the routing cursor, which moves past them. After a restart the cursor starts at the
+        last routed order, looking back at most one `source` cadence."""
+        assert self._feed is not None
+        if self._cursor is None:
+            since = self._pack.assets[source].trigger.since(now) or now
+            last = self._ops.last_routed()
+            self._cursor = encode_cursor(since if last is None else max(last, since), UUID(int=0))
+        changed: set[UUID] = set()
+        refusals: defaultdict[UUID, list[Refusal]] = defaultdict(list)
+        while True:
+            page = self._feed.list(PageRequest(limit=FEED_PAGE, cursor=self._cursor))
+            for event in page.items:
+                order = event.order
+                if order is None or order.repository_id is None:
+                    continue
+                if order.asset == source and order.state in MATERIALIZED:
+                    changed.add(order.repository_id)
+                elif order.state == OrderState.REFUSED and order.lane is not None:
+                    refusals[order.repository_id].append(
+                        Refusal(
+                            subject=str(order.repository_id),
+                            lane=LaneName(order.lane),
+                            reason=order.reason,
+                        )
+                    )
+            if page.items:
+                self._cursor = page.items[-1].cursor
+            if page.next is None:
+                return changed, refusals
 
     def _fresh(self, dep: AssetName, now: datetime) -> set[UUID | None]:
         return self._ops.subjects(dep, MATERIALIZED, self._pack.assets[dep].trigger.since(now))
