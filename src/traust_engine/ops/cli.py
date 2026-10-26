@@ -167,6 +167,9 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--pin", type=Path, action="append", default=[], help="pinned config for run manifests"
     )
+    common.add_argument(
+        "--feeds", type=Path, help="the pack's feeds registry: its feeds are known to core"
+    )
     passes = argparse.ArgumentParser(add_help=False)
     passes.add_argument("--router", help="the pack's router, module:Class")
     passes.add_argument("--once", action="store_true", help="one pass, then exit (from cron)")
@@ -207,7 +210,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.command = argv[split + 1 :]
     try:
         core = Context.from_file(args.core)
-        pack = Pack.load(args.pack, *args.pin)
+        if args.feeds:
+            core.register_feeds(args.feeds)
+        pack = Pack.load(args.pack, *args.pin, *([args.feeds] if args.feeds else []))
         if args.op in ("run", "shadow"):
             return _passes(args, core, pack, shadow=args.op == "shadow")
         ops = {"record": _record, "diff": _diff, "claim": _claim}
