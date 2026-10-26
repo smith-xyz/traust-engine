@@ -1,32 +1,42 @@
-"""traust-engine's scanner adapters as traust-core tool providers, and its toolchain as core's
-`ToolInspector`.
+"""traust-engine's scanner adapters as traust-core tool providers.
 
-Each provider runs its adapter's own `scan()` over one checkout (the adapter keeps its argv,
-safe_exec profile, freeze env, rule-pack pinning and secret redaction); this module only adapts
-the call to core's `ToolProvider` and the toolchain probes to `ToolInspector`. Nothing here
-starts a process or opens a connection the adapter didn't already.
+Each provider runs its adapter's own `scan()` over one target (the adapter keeps its argv,
+safe_exec profile, freeze env, rule-pack pinning and secret redaction) and reports the
+binary's version and database through the engine toolchain probes; this module only adapts
+the call to core's `ToolProvider`. Nothing here starts a process or opens a connection the
+adapter or toolchain didn't already.
 
-Not registered (see `UNREGISTERED`): adapters whose input is not a checkout, and the crypto
-probes core already implements natively.
+Not registered (see `UNREGISTERED`): the crypto probes core already implements natively.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from traust_core.v1.context import Context
-from traust_core.v1.errors import ConfigError, ServiceError, TraustError, ValidationError
-from traust_core.v1.providers.base import Acquisition, Readiness, Result, on_path
+from traust_core.v1.errors import ServiceError, TraustError, ValidationError
+from traust_core.v1.models.common import ToolTarget
+from traust_core.v1.providers.base import Acquisition, Readiness, Result, argv_digest, on_path
 from traust_core.v1.providers.clock import Clock
-from traust_core.v1.providers.tools import DatabaseStatus, ToolRequest
+from traust_core.v1.providers.tools import DatabaseStatus, NoDatabase, ToolRequest
 
 from traust_engine import toolchain
-from traust_engine.adapters import cloud_config, gitleaks, govulncheck, grype, opengrep, osv, yara
+from traust_engine.adapters import (
+    cloud_config,
+    gitleaks,
+    govulncheck,
+    grype,
+    joern,
+    opengrep,
+    osv,
+    osv_sbom,
+    yara,
+)
 from traust_engine.adapters._contract_bridge import AdapterResult  # contract types via adapters
 from traust_engine.osv import OsvClient
 
@@ -35,83 +45,74 @@ GRYPE_DB_MAX_AGE = timedelta(days=5)
 
 # Adapters with no provider here, and why; `traust admin toolchain` can name them.
 UNREGISTERED: Mapping[str, str] = {
-    "joern": "NEED(core: ToolRequest symbols): a reachability query needs the vulnerable "
-    "symbols, which a checkout-only ToolRequest cannot carry",
-    "osv_sbom": "NEED(core: ToolRequest sbom): it scans a syft SBOM, not a checkout",
     "crypto_probe": "core's CryptoProbe (FactEnumerator) is the source-tree crypto census",
     "crypto_audit": "core's CryptoProbe, ImageCryptoProbe and ClusterCryptoProbe cover its "
     "source, image and cluster modes",
 }
 
-
-class NoDatabase(ConfigError):
-    """`update_database` for a tool that keeps no vulnerability database."""
+Res = TypeVar("Res")
 
 
 @dataclass(frozen=True, slots=True)
-class AdapterTool:
-    """One engine adapter over a checkout, as its `AdapterResult`; read-only toward it."""
+class AdapterTool(Generic[Res]):
+    """One engine adapter over one kind of target, with its binary's version and database."""
 
     name: str
     binaries: tuple[str, ...]
-    scan: Callable[[Path], AdapterResult]
+    scan: Callable[[Any], Res]
     clock: Clock
     precondition: Callable[[], Readiness] | None = None
+    target: ToolTarget = ToolTarget.CHECKOUT
+    pin: Mapping[str, Any] = field(default_factory=dict)  # the binary's external-tools.yaml row
+    # The argv `scan` runs, for adapters that build it from the target alone.
+    argv: Callable[[Any], Sequence[str]] | None = None
 
     def check(self) -> Readiness:
         if self.binaries and not (found := on_path(*self.binaries, missing=" not on PATH")).ready:
             return found
         return self.precondition() if self.precondition else Readiness(ready=True)
 
-    def acquire(self, request: ToolRequest) -> Result[AdapterResult]:
-        workspace = request.workspace
-        if not workspace.is_dir():
-            raise ValidationError(f"{self.name}: workspace is not a directory: {workspace}")
+    def acquire(self, request: ToolRequest) -> Result[Res]:
+        given, where = self._target(request)
         try:
-            result = self.scan(workspace)
+            result = self.scan(given)
         except TraustError:
             raise
         except ValueError as e:
-            raise ValidationError(f"{self.name} over {workspace}: {e}") from e
+            raise ValidationError(f"{self.name} over {where}: {e}") from e
         except (OSError, RuntimeError) as e:  # missing binary, timeout, tool failure
-            raise ServiceError(f"{self.name} over {workspace}: {e}") from e
+            raise ServiceError(f"{self.name} over {where}: {e}") from e
+        db = self.database()
         return Result(
             result,
             Acquisition(
                 provider=self.name,
                 acquired_at=self.clock.now(),
-                version=result.metadata.scanner_version or None,
-                source=str(workspace.resolve()),
+                version=_scanner_version(result),
+                source=str(where.resolve()),
+                argv_sha256=argv_digest(self.argv(given)) if self.argv else None,
+                db_built_at=db.built_at if db else None,
             ),
         )
 
-
-class EngineToolInspector:
-    """Core's `ToolInspector` over the engine toolchain probes: each tool's version (its
-    external-tools.yaml pin's version command) and grype's database."""
-
-    def __init__(self, binaries: Mapping[str, str], pins: Mapping[str, Mapping[str, Any]]) -> None:
-        self._binaries = dict(binaries)
-        self._pins = {k: dict(v) for k, v in pins.items()}
-
-    def version(self, tool: str) -> str | None:
-        binary = self._binaries.get(tool, tool)
-        if not binary:
+    def version(self) -> str | None:
+        if not self._binary:
             return None  # an API, not a binary (osv)
-        spec = self._pins.get(binary, {})
         return toolchain.tool_version(
-            binary, version_cmd=spec.get("version_cmd"), version_regex=spec.get("version_regex")
+            self._binary,
+            version_cmd=self.pin.get("version_cmd"),
+            version_regex=self.pin.get("version_regex"),
         )
 
-    def database(self, tool: str) -> DatabaseStatus | None:
-        binary = self._binaries.get(tool, tool)
-        if binary not in toolchain.POPULATABLE_TOOLS:
-            return None
-        info = toolchain.db_status(binary)
-        if info is None:
+    def database(self) -> DatabaseStatus | None:
+        binary = self._binary
+        if (
+            binary not in toolchain.POPULATABLE_TOOLS
+            or (info := toolchain.db_status(binary)) is None
+        ):
             return None
         return DatabaseStatus(
-            tool=tool,
+            tool=self.name,
             exists=info.exists,
             built_at=_built_at(info.built),
             schema_version=info.schema_version,
@@ -119,17 +120,37 @@ class EngineToolInspector:
             path=info.path,
         )
 
-    def update_database(self, tool: str) -> DatabaseStatus:
-        binary = self._binaries.get(tool, tool)
+    def update_database(self) -> DatabaseStatus:
+        binary = self._binary
         if binary not in toolchain.POPULATABLE_TOOLS:
-            raise NoDatabase(f"{tool} keeps no vulnerability database to update")
+            raise NoDatabase(f"{self.name} keeps no vulnerability database to update")
         ok, message = toolchain.populate(binary)
         if not ok:
             raise ServiceError(message)
-        status = self.database(tool)
+        status = self.database()
         if status is None:
-            raise ServiceError(f"{tool}: database updated but its status is unreadable")
+            raise ServiceError(f"{self.name}: database updated but its status is unreadable")
         return status
+
+    @property
+    def _binary(self) -> str:
+        return self.binaries[0] if self.binaries else ""
+
+    def _target(self, request: ToolRequest) -> tuple[Any, Path]:
+        """The scan's input, and the path its errors and provenance name."""
+        if request.target is not self.target:
+            raise ValidationError(
+                f"{self.name} runs over a {self.target.value}, not a {request.target.value}"
+            )
+        if (sbom := request.sbom) is not None:
+            if not sbom.is_file():
+                raise ValidationError(f"{self.name}: SBOM is not a file: {sbom}")
+            return sbom, sbom
+        query = request.symbols
+        workspace = query.workspace if query else request.checkout()
+        if not workspace.is_dir():
+            raise ValidationError(f"{self.name}: workspace is not a directory: {workspace}")
+        return query or workspace, workspace
 
 
 def register_tools(
@@ -143,57 +164,77 @@ def register_tools(
     yara_rules: Sequence[str] = (),
     osv_client: Callable[[], OsvClient] = OsvClient,
 ) -> None:
-    """Register every checkout scanner in `ctx.tools` (Checkov included, through
-    `register_checkov`), the toolchain as `ctx.tool_inspector`, and the pins' `expected`
-    versions as `ctx.tool_floors`.
+    """Register every engine scanner in `ctx.tools` (Checkov included, through
+    `register_checkov`) and the pins' `expected` versions as `ctx.tool_floors`.
 
     `profile_map` is the deployment's safe_exec profiles (`AdaptersOps.safe_exec_profile_map()`),
     `pins` external-tools.yaml (`ToolchainOps.pins()`), `rule_pack` / `allowlist` the opengrep
     pack and supplemental-pack allowlist, `yara_rules` pinned `url@sha` sources (empty: the
     adapter's pinned default).
     """
-    if ctx.tool_inspector is not None:
-        raise ConfigError("a tool inspector is already registered")
     clock = ctx.clock
     profiles = dict(profile_map)
     rules = list(yara_rules)
+
+    def tool(
+        name: str, binaries: tuple[str, ...], scan: Callable[[Any], Any], **kw: Any
+    ) -> AdapterTool[Any]:
+        return AdapterTool(
+            name, binaries, scan, clock, pin=pins.get(next(iter(binaries), ""), {}), **kw
+        )
+
+    def gitleaks_ready() -> Readiness:
+        return _resolves("gitleaks", lambda: gitleaks.resolve_gitleaks_config(None, loc))
+
     tools = [
-        AdapterTool(
+        tool(
             "gitleaks",
             ("gitleaks",),
             lambda w: gitleaks.scan(w, mode="dir", loc=loc),
-            clock,
-            lambda: _resolves("gitleaks", lambda: gitleaks.resolve_gitleaks_config(None, loc)),
+            precondition=gitleaks_ready,
         ),
-        AdapterTool(
+        tool(
             "gitleaks-history",
             ("gitleaks", "git"),
             lambda w: gitleaks.scan(w, mode="history", loc=loc),
-            clock,
-            lambda: _resolves("gitleaks", lambda: gitleaks.resolve_gitleaks_config(None, loc)),
+            precondition=gitleaks_ready,
         ),
-        AdapterTool(
+        tool(
             "govulncheck",
             ("govulncheck", "go"),
             lambda w: govulncheck.scan(w, profile_map=profiles),
-            clock,
+            argv=lambda _: govulncheck.command(),
         ),
-        AdapterTool("grype", ("grype",), lambda w: grype.scan(w), clock),  # DB frozen by default
-        AdapterTool(
+        tool(  # DB frozen by default
+            "grype", ("grype",), lambda w: grype.scan(w), argv=lambda w: grype.command(str(w))
+        ),
+        tool(
+            "joern",
+            ("joern", "joern-parse"),
+            lambda q: joern.scan(q.workspace, symbols=list(q.names)),
+            target=ToolTarget.SYMBOLS,
+        ),
+        tool(
             "opengrep",
             ("opengrep",),
             lambda w: opengrep.scan(w, rule_pack=rule_pack, allowlist=allowlist, loc=loc),
-            clock,
-            lambda: _resolves("opengrep", lambda: opengrep.resolve_rule_pack_dir(rule_pack, loc)),
+            precondition=lambda: _resolves(
+                "opengrep", lambda: opengrep.resolve_rule_pack_dir(rule_pack, loc)
+            ),
         ),
-        AdapterTool("osv", (), lambda w: osv.scan(w, client=osv_client()), clock),
-        AdapterTool("yara", ("yara", "git"), lambda w: yara.scan(w, rules=rules), clock),
+        tool("osv", (), lambda w: osv.scan(w, client=osv_client())),
+        tool(
+            "osv_sbom",
+            (),
+            lambda p: osv_sbom.scan(p, client=osv_client()),
+            target=ToolTarget.SBOM,
+        ),
+        tool("yara", ("yara", "git"), lambda w: yara.scan(w, rules=rules)),
     ]
-    for tool in tools:
-        ctx.tools.register(tool.name, lambda t=tool: t)
+    for t in tools:
+        ctx.tools.register(t.name, lambda t=t: t)
     cloud_config.register_checkov(ctx)
-    binaries = {t.name: t.binaries[0] if t.binaries else "" for t in tools}
-    ctx.tool_inspector = EngineToolInspector(binaries, pins)
+    binaries = {t.name: t._binary for t in tools}
     ctx.tool_floors.update(
         {
             name: str(spec["expected"])
@@ -201,6 +242,10 @@ def register_tools(
             if binary and (spec := pins.get(binary)) and spec.get("expected")
         }
     )
+
+
+def _scanner_version(result: object) -> str | None:
+    return (result.metadata.scanner_version or None) if isinstance(result, AdapterResult) else None
 
 
 def _resolves(tool: str, resolve: Callable[[], object]) -> Readiness:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -11,21 +12,30 @@ from traust_contracts.models import AdapterResult
 from traust_core.v1.context import Config, Context
 from traust_core.v1.errors import ConfigError, ServiceError, ValidationError
 from traust_core.v1.models.assessment import ToolName
+from traust_core.v1.models.common import SymbolQuery
+from traust_core.v1.providers.base import argv_digest
 from traust_core.v1.providers.clock import FixedClock
+from traust_core.v1.providers.tools import ToolProvider
 from traust_core.v1.services.provider_catalog import Capability, CapabilityKind
 
-from traust_engine.adapters import gitleaks, govulncheck, grype, opengrep, osv, tools, yara
-from traust_engine.adapters._contract_bridge import build_scan_result
-from traust_engine.adapters.tools import (
-    AdapterTool,
-    EngineToolInspector,
-    NoDatabase,
-    register_tools,
+from traust_engine.adapters import (
+    gitleaks,
+    govulncheck,
+    grype,
+    joern,
+    opengrep,
+    osv,
+    osv_sbom,
+    tools,
+    yara,
 )
+from traust_engine.adapters._contract_bridge import build_scan_result
+from traust_engine.adapters.tools import AdapterTool, NoDatabase, register_tools
 from traust_engine.toolchain import DBInfo
 
 NOW = datetime(2026, 10, 24, 12, tzinfo=UTC)
 CHECKOUT_TOOLS = ["gitleaks", "gitleaks-history", "govulncheck", "grype", "opengrep", "osv", "yara"]
+OTHER_TARGET_TOOLS = ["joern", "osv_sbom"]
 PINS = {
     "gitleaks": {"expected": "8.30.1", "version_cmd": ["gitleaks", "version"]},
     "grype": {"expected": "0.115.0"},
@@ -52,12 +62,13 @@ def _ctx(tmp_path: Path, **kw: Any) -> Context:
     return ctx
 
 
-def test_every_checkout_scanner_and_checkov_are_registered_with_the_inspector_and_floors(
+def test_every_scanner_and_checkov_are_registered_reporting_themselves_with_the_floors(
     tmp_path: Path,
 ) -> None:
     ctx = _ctx(tmp_path)
-    assert ctx.tools.names() == sorted([*CHECKOUT_TOOLS, "checkov"])
-    assert isinstance(ctx.tool_inspector, EngineToolInspector)
+    assert ctx.tools.names() == sorted([*CHECKOUT_TOOLS, *OTHER_TARGET_TOOLS, "checkov"])
+    assert all(isinstance(ctx.tools.get(n), ToolProvider) for n in ctx.tools.names())
+    assert ctx.tool_inspector is None
     assert ctx.tool_floors == {
         "gitleaks": "8.30.1",
         "gitleaks-history": "8.30.1",
@@ -68,7 +79,7 @@ def test_every_checkout_scanner_and_checkov_are_registered_with_the_inspector_an
 
 def test_a_second_registration_is_refused(tmp_path: Path) -> None:
     ctx = _ctx(tmp_path)
-    with pytest.raises(ConfigError, match="already registered"):
+    with pytest.raises(ConfigError, match="registered twice"):
         register_tools(ctx, loc=None, profile_map={}, pins={}, rule_pack=tmp_path)
 
 
@@ -241,12 +252,14 @@ def test_fetch_databases_updates_only_grype(
 def test_a_failed_or_impossible_database_update_is_a_typed_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    inspector = EngineToolInspector({"grype": "grype", "gitleaks": "gitleaks"}, {})
+    def tool(name: str) -> AdapterTool:
+        return AdapterTool(name, (name,), lambda _: None, FixedClock(NOW))
+
     monkeypatch.setattr(tools.toolchain, "populate", lambda b: (False, "grype: db update failed"))
     with pytest.raises(ServiceError, match="db update failed"):
-        inspector.update_database("grype")
+        tool("grype").update_database()
     with pytest.raises(NoDatabase, match="gitleaks keeps no vulnerability database"):
-        inspector.update_database("gitleaks")
+        tool("gitleaks").update_database()
 
 
 @pytest.mark.parametrize(
@@ -266,3 +279,120 @@ def test_the_providers_start_no_process_of_their_own() -> None:
     source = Path(tools.__file__).read_text(encoding="utf-8")
     for forbidden in ("subprocess", "urlopen", "ProcessRunner(", "socket"):
         assert forbidden not in source
+
+
+def test_joern_runs_over_the_symbols_target_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[tuple[Path, Any]] = []
+    monkeypatch.setattr(
+        joern, "scan", lambda r, symbols: seen.append((r, symbols)) or _result("joern", r)
+    )
+    query = SymbolQuery(workspace=tmp_path, names=("com.foo.Bar#parse",))
+    result = _ctx(tmp_path).tools.get("joern").acquire(tools.ToolRequest(symbols=query))
+    assert seen == [(tmp_path, ["com.foo.Bar#parse"])]
+    assert result.acquisition.source == str(tmp_path.resolve())
+
+
+def test_osv_sbom_runs_over_the_sbom_and_a_failed_lookup_is_a_service_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sbom = tmp_path / "image.syft.json"
+    sbom.write_text("{}", encoding="utf-8")
+    client = object()
+    doc = {"provenance": {"status": "complete"}, "candidates": []}
+    seen: list[tuple[Path, object]] = []
+    monkeypatch.setattr(osv_sbom, "scan_sbom", lambda p, c: seen.append((p, c)) or doc)
+    tool = _ctx(tmp_path, osv_client=lambda: client).tools.get("osv_sbom")
+    result = tool.acquire(tools.ToolRequest(sbom=sbom))
+    assert result.data == doc and seen == [(sbom, client)]
+    assert result.acquisition.version is None
+    failed = {"status": "failed", "base_url": "https://osv.invalid", "failure": {"detail": "503"}}
+    monkeypatch.setattr(osv_sbom, "scan_sbom", lambda p, c: {"provenance": failed})
+    with pytest.raises(ServiceError, match=r"OSV API unavailable at https://osv.invalid: 503"):
+        tool.acquire(tools.ToolRequest(sbom=sbom))
+
+
+def test_a_malformed_sbom_is_a_validation_error(tmp_path: Path) -> None:
+    sbom = tmp_path / "image.cdx.json"
+    sbom.write_text('{"bomFormat": "CycloneDX"}', encoding="utf-8")
+    tool = _ctx(tmp_path).tools.get("osv_sbom")
+    with pytest.raises(ValidationError, match="not a syft JSON SBOM"):
+        tool.acquire(tools.ToolRequest(sbom=sbom))
+
+
+@pytest.mark.parametrize(
+    ("tool", "request_for", "message"),
+    [
+        ("grype", lambda p: {"sbom": p / "x.json"}, "grype runs over a checkout, not a sbom"),
+        ("osv_sbom", lambda p: {"workspace": p}, "osv_sbom runs over a sbom, not a checkout"),
+        ("joern", lambda p: {"workspace": p}, "joern runs over a symbols, not a checkout"),
+        ("osv_sbom", lambda p: {"sbom": p / "absent.json"}, "SBOM is not a file"),
+        (
+            "joern",
+            lambda p: {"symbols": SymbolQuery(workspace=p / "absent", names=("f",))},
+            "workspace is not a directory",
+        ),
+    ],
+)
+def test_a_request_for_another_or_a_missing_target_never_reaches_the_adapter(
+    tmp_path: Path, tool: str, request_for: Any, message: str
+) -> None:
+    provider = _ctx(tmp_path).tools.get(tool)
+    with pytest.raises(ValidationError, match=message):
+        provider.acquire(tools.ToolRequest(**request_for(tmp_path)))
+
+
+def test_grype_records_the_argv_it_ran_and_its_database_build_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ran: list[list[str]] = []
+
+    def run(cmd: list[str], **_: Any) -> Any:
+        ran.append(cmd)
+        return type("Done", (), {"returncode": 0, "stdout": '{"matches": []}', "stderr": ""})()
+
+    monkeypatch.setattr(grype, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(grype, "_tool_version", lambda b: "0.115.0")
+    monkeypatch.setattr(
+        tools.toolchain, "db_status", lambda b: DBInfo(exists=True, built="2026-10-23T01:31:46Z")
+    )
+    result = _ctx(tmp_path).tools.get("grype").acquire(tools.ToolRequest(workspace=tmp_path))
+    assert result.acquisition.argv_sha256 == argv_digest(ran[0])
+    assert ran[0] == ["grype", str(tmp_path), "-o", "json"]
+    assert result.acquisition.db_built_at == datetime(2026, 10, 23, 1, 31, 46, tzinfo=UTC)
+
+
+def test_govulncheck_records_its_argv_and_tools_without_a_known_argv_or_db_record_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for module, name in ((govulncheck, "govulncheck"), (gitleaks, "gitleaks")):
+        monkeypatch.setattr(module, "scan", lambda t, _n=name, **_: _result(_n, t))
+    ctx = _ctx(tmp_path)
+    request = tools.ToolRequest(workspace=tmp_path)
+    vuln = ctx.tools.get("govulncheck").acquire(request).acquisition
+    assert vuln.argv_sha256 == argv_digest(["govulncheck", "-json", "./..."])
+    assert vuln.db_built_at is None
+    leaks = ctx.tools.get("gitleaks").acquire(request).acquisition
+    assert leaks.argv_sha256 is None and leaks.db_built_at is None
+
+
+def test_joern_reports_its_version_through_its_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked: list[tuple[str, Any]] = []
+    monkeypatch.setattr(
+        tools.toolchain,
+        "tool_version",
+        lambda b, version_cmd=None, version_regex=None: (
+            asked.append((b, version_regex)) or "4.0.600"
+        ),
+    )
+    regex = r"Version:\s*(\d+)\.(\d+)\.(\d+)"
+    tool = AdapterTool(
+        "joern",
+        ("joern", "joern-parse"),
+        lambda _: None,
+        FixedClock(NOW),
+        pin={"version_regex": regex},
+    )
+    assert tool.version() == "4.0.600" and asked == [("joern", regex)]
+    assert tool.database() is None

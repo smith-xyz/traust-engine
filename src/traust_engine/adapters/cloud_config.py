@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -29,7 +30,7 @@ from traust_core.v1.models.cloud_config import (
 from traust_core.v1.providers.base import Acquisition, Readiness, Result
 from traust_core.v1.providers.clock import Clock
 from traust_core.v1.providers.process import ProcessRunner
-from traust_core.v1.providers.tools import ToolRequest
+from traust_core.v1.providers.tools import DatabaseStatus, NoDatabase, ToolRequest
 
 CHECKOV_TIMEOUT = 1800.0
 PROBE_TIMEOUT = 60.0  # version probes, git HEAD, and one `bicep build`
@@ -71,7 +72,7 @@ class CheckovProvider:
         return Readiness(ready=True)
 
     def acquire(self, request: ToolRequest) -> Result[CloudConfigFacts]:
-        workspace = request.workspace
+        workspace = request.checkout()
         if not workspace.is_dir():
             raise ValidationError(f"checkov: workspace is not a directory: {workspace}")
         reported = self._version()
@@ -86,6 +87,19 @@ class CheckovProvider:
                 source=str(workspace.resolve()),
             ),
         )
+
+    def version(self) -> str | None:
+        try:
+            found = re.search(r"\d+\.\d+\.\d+", self._version())
+        except ServiceError:
+            return None  # not installed: readiness says so
+        return found.group(0) if found else None
+
+    def database(self) -> DatabaseStatus | None:
+        return None
+
+    def update_database(self) -> DatabaseStatus:
+        raise NoDatabase(f"{self.name} keeps no vulnerability database to update")
 
     def _version(self) -> str:
         try:

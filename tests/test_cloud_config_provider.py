@@ -19,7 +19,7 @@ from traust_core.v1.errors import ConfigError, ServiceError, ValidationError
 from traust_core.v1.models.cloud_config import CheckovScan, CloudConfigFacts
 from traust_core.v1.providers.clock import FixedClock
 from traust_core.v1.providers.process import ProcessResult, ProcessRunner
-from traust_core.v1.providers.tools import ToolRequest
+from traust_core.v1.providers.tools import NoDatabase, ToolRequest
 
 from traust_engine.adapters import cloud_config
 from traust_engine.adapters.cloud_config import (
@@ -646,3 +646,27 @@ def test_the_probe_runner_allows_checkov_git_bicep_and_each_candidate(
     assert built._checkov._allowed == {"checkov"}
     for cand in built._bicep:
         built._probe._validate([str(cand), "--version"])  # raises when not allowed
+
+
+@pytest.mark.parametrize(
+    ("answer", "expect"),
+    [
+        (b"3.3.6\n", "3.3.6"),
+        (b"checkov 3.2.1 (pip)\n", "3.2.1"),
+        (b"no version here\n", None),
+        (failed_to_run(FileNotFoundError("checkov")), None),
+    ],
+)
+def test_checkov_reports_its_own_version_and_keeps_no_database(
+    answer: Answer, expect: str | None
+) -> None:
+    checkov = provider(Tools(version=answer))
+    assert checkov.version() == expect
+    assert checkov.database() is None
+    with pytest.raises(NoDatabase, match="checkov keeps no vulnerability database"):
+        checkov.update_database()
+
+
+def test_checkov_refuses_a_target_that_is_not_a_checkout(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="runs over a checkout, not a sbom"):
+        provider(Tools()).acquire(ToolRequest(sbom=tmp_path / "x.json"))
