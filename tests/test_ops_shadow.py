@@ -21,6 +21,7 @@ from traust_core.v1.models.common import every_item
 from traust_core.v1.models.operations import (
     JobResult,
     OrderFilter,
+    OrderReason,
     OrderRequest,
     OrderState,
     Route,
@@ -171,8 +172,8 @@ def _done(code: int, stdout: str = "") -> subprocess.CompletedProcess[str]:
         (_done(5, "log\n" + JobResult.refused("x").model_dump_json()), JobResult.refused("x")),
         (_done(0, "done"), JobResult.succeeded()),
         (_done(0), JobResult.succeeded()),
-        (_done(3, "{not json"), JobResult.failed("exit 3")),
-        (_done(1), JobResult.failed("exit 1")),
+        (_done(3, "{not json"), JobResult.failed(OrderReason.RUNNER_CRASHED)),
+        (_done(1), JobResult.failed(OrderReason.RUNNER_CRASHED)),
     ],
     ids=["degraded answer", "refused answer", "plain output", "silent", "garbled", "plain failure"],
 )
@@ -216,7 +217,7 @@ def _python(code: str) -> list[str]:
 
 
 def test_record_runs_the_command_as_an_order_and_exits_with_it(core: Path) -> None:
-    answer = JobResult.partly({"kev": 1}).model_dump_json()
+    answer = JobResult.partly({"unreachable": 1}).model_dump_json()
     rc, out = _cli(core, "record", "feeds_cache", *_python(f"print({answer!r}); exit(4)"))
     (order,) = _orders(core)
     assert (rc, out.strip()) == (4, answer)

@@ -18,6 +18,7 @@ from traust_core.v1.models.operations import (
     BudgetVerdict,
     LaneName,
     OrderFilter,
+    OrderReason,
     OrderState,
     RunOrder,
 )
@@ -27,9 +28,6 @@ from traust_core.v1.services.operations import OpsService, SpendService
 from traust_engine.ops.pack import AssetSpec, Pack, Quota
 
 log = logging.getLogger(__name__)
-
-BUDGET_REASON = "budget-over"
-NOT_IN_PACK_REASON = "asset-not-in-pack"
 
 
 class AdmissionReport(Model):
@@ -77,13 +75,13 @@ class Admission:
             asset = AssetName(order.asset)
             spec = self._pack.assets.get(asset)
             if spec is None:
-                self._ops.withhold(order.id, NOT_IN_PACK_REASON)
+                self._ops.withhold(order.id, OrderReason.ASSET_NOT_IN_PACK)
                 report["withheld"] += 1
                 continue
             verdict = self._verdict(order, spec, budgets, committed)
             pacing, quota = spec.admission.pacing, spec.admission.quota
             if verdict is not None and verdict.binding:
-                self._ops.withhold(order.id, BUDGET_REASON, verdict)
+                self._ops.withhold(order.id, OrderReason.BUDGET_OVER, verdict)
                 report["withheld"] += 1
                 continue
             if (pacing and paced[asset] >= pacing.per_tick) or (
