@@ -2,6 +2,25 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.39.0]
+
+- **LLM-application rule pack** on `development`, ported from `main`
+  (engine#51):
+  - **Python, TypeScript and Go rules for:**
+    - `trust_remote_code=True`;
+    - `torch.load` without `weights_only=True`;
+    - model downloads with no pinned revision;
+    - model output reaching subprocess, eval, SQL or file sinks;
+    - agent loops with no step bound;
+    - MCP servers on an HTTP or SSE transport with no authentication in the
+      file.
+  - **Fixtures:** every rule has `ruleid:` / `ok:` fixtures (`opengrep test`:
+    82/82 across the pack).
+  - **OWASP category:** scanner facts carry each rule's OWASP LLM category as
+    `owasp_llm`.
+  - **Pre-commit hook:** now passes `--force-exclude`, so the rule fixtures
+    stay outside ruff.
+
 ## [0.38.3]
 
 - Close native scan-to-artifact admission by using the adapter-specific scanner
