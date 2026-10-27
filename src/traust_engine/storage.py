@@ -34,6 +34,9 @@ USAGE
     from traust_engine import storage
     db = storage.localize(cfg.portfolio_graph_uri())   # -> local Path
     if storage.exists(results_uri / "graph/sboms"): ...
+
+PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+deleted when traust retires or ports it.
 """
 
 from __future__ import annotations

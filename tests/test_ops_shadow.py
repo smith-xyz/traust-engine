@@ -225,6 +225,13 @@ def test_record_runs_the_command_as_an_order_and_exits_with_it(core: Path) -> No
     assert order.requested_by.startswith("machine:record:")
 
 
+def test_record_a_refused_answer_leaves_the_order_refused_with_its_reason(core: Path) -> None:
+    answer = JobResult.refused(OrderReason.LEDGER_UNCONFIGURED).model_dump_json()
+    rc, _ = _cli(core, "record", "feeds_cache", *_python(f"print({answer!r}); exit(5)"))
+    (order,) = _orders(core)
+    assert (rc, order.state, order.reason) == (5, "refused", OrderReason.LEDGER_UNCONFIGURED)
+
+
 def test_record_a_repository_asset_by_its_url(core: Path) -> None:
     repository_id, url = _repository(core)
     rc, _ = _cli(core, "record", "repo_state", "--repo", url, *_python("pass"))

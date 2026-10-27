@@ -1,12 +1,12 @@
 """The bundled rule packs are the single, default copy — and a default run uses them.
 
-traust-engine ships the opengrep rule pack and the gitleaks config inside the
-package. No consumer configures them: with no rule-pack argument and no
-``locations`` override, the adapters resolve to these copies. These tests
+traust-engine ships the opengrep rule pack inside the package. No consumer
+configures it: with no rule-pack argument and no ``locations`` override, the
+adapter resolves to this copy. These tests
 pin that contract end to end, so a default run that stops loading current
 rules fails instead of silently scanning with stale ones. They are not
-marked ``integration``, so the pre-push hook runs them wherever opengrep and
-gitleaks are installed (and skips them cleanly where they are not).
+marked ``integration``, so the pre-push hook runs them wherever opengrep is
+installed (and skips them cleanly where it is not).
 """
 
 import shutil
@@ -15,9 +15,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from traust_engine.adapters import gitleaks as G
 from traust_engine.adapters import opengrep as O
-from traust_engine.assets import default_gitleaks_config, default_rule_pack_dir
+from traust_engine.assets import default_rule_pack_dir
 
 PACK = default_rule_pack_dir()
 LANG_DIRS = sorted(p for p in PACK.iterdir() if p.is_dir())
@@ -45,9 +44,6 @@ CANARIES = {
 class TestDefaultResolution(unittest.TestCase):
     def test_no_argument_no_config_resolves_to_the_bundled_pack(self):
         self.assertEqual(O.resolve_rule_pack_dir(None, None), PACK)
-
-    def test_no_argument_no_config_resolves_to_the_bundled_gitleaks_config(self):
-        self.assertEqual(G.resolve_gitleaks_config(None, None), default_gitleaks_config())
 
     def test_every_rule_file_has_a_fixture(self):
         missing = []
@@ -81,19 +77,6 @@ class TestBundledOpengrepPack(unittest.TestCase):
         found = {f.id if hasattr(f, "id") else f["id"] for f in result.findings}
         for _name, (_code, rule) in CANARIES.items():
             self.assertIn(f"opengrep/{rule}", found)
-
-
-@unittest.skipUnless(shutil.which("gitleaks"), "gitleaks not on PATH")
-class TestBundledGitleaksConfig(unittest.TestCase):
-    def test_default_scan_reports_a_traust_detector(self):
-        with tempfile.TemporaryDirectory() as d:
-            root = Path(d)
-            (root / "settings.py").write_text(
-                'TOKEN = "sha256~' + "B" * 43 + '"\n', encoding="utf-8"
-            )
-            result = G.scan(root)  # no config, no loc: the bundled default
-        found = {f.id if hasattr(f, "id") else f["id"] for f in result.findings}
-        self.assertIn("gitleaks/traust-openshift-sha256-token", found)
 
 
 class TestNosemComments(unittest.TestCase):

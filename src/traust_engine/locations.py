@@ -10,6 +10,9 @@ There is deliberately no environment self-fetch: a location can only come from a
 context the caller resolved, so no consumer can silently read a second estate
 below the ops layer. The resolution logic lives here, once; ops pass ``self._loc``
 and never re-derive it.
+
+PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+deleted when traust retires or ports it.
 """
 
 from __future__ import annotations

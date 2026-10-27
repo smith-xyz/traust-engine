@@ -77,21 +77,6 @@ def test_resolve_rule_pack_dir_uses_locations(tmp_path):
     assert resolve_rule_pack_dir(loc=Locations(opengrep_rules=str(configured))) == configured
 
 
-def test_resolve_gitleaks_config_uses_locations(tmp_path):
-    from traust_engine.adapters.gitleaks import resolve_gitleaks_config
-
-    configured = tmp_path / "from-locations.toml"
-    configured.write_text("title = 'x'\n", encoding="utf-8")
-    assert resolve_gitleaks_config(loc=Locations(gitleaks_config=str(configured))) == configured
-
-
-def test_resolve_gitleaks_config_rejects_remote_uri():
-    from traust_engine.adapters.gitleaks import resolve_gitleaks_config
-
-    with pytest.raises(ValueError, match="no local path form"):
-        resolve_gitleaks_config(loc=Locations(gitleaks_config="s3://bucket/gitleaks.toml"))
-
-
 def test_resolve_rule_pack_dir_rejects_remote_uri():
     from traust_engine.adapters.opengrep import resolve_rule_pack_dir
 
@@ -100,7 +85,6 @@ def test_resolve_rule_pack_dir_rejects_remote_uri():
 
 
 def test_bundled_defaults_exist_on_disk():
-    from traust_engine.assets import default_gitleaks_config, default_rule_pack_dir
+    from traust_engine.assets import default_rule_pack_dir
 
-    assert default_gitleaks_config().is_file()
     assert default_rule_pack_dir().is_dir()

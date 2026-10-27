@@ -1,18 +1,17 @@
-"""Harness Engine — processing core for the AI security harness.
+"""Harness Engine — the continuous-ops service on traust-core.
 
 Submodules:
     ops         — continuous ops: pack spec, controller (tick), admission, reaper
-    corpus      — population management (discovery, identity, dedup)
-    metrics     — hash-chained metrics recording + spend tracking
-    portfolio   — source-code dependency graph analysis
+
+Kept for traust until its PENDING decisions (sweep stages, portfolio graph
+layers, metrics journal) retire or port them:
+    engine      — the ``HarnessEngine`` facade (metrics, models, adapters, sweep, portfolio)
     sweep       — class-generalization scan engine
-    impact      — language-aware impact analysis
-    adapters    — external scanner wrappers (opengrep, osv, gitleaks, ...)
-    compliance  — compliance scope + boundary resolution
-    reporting   — output format handlers (validate, render, SARIF)
-    registry    — model + product resolution
-    escaping    — public text-safety helpers (HTML, JSON-in-script, md cells, CSV)
-    _util       — leaf utilities (paths, safe_exec, elf, redact)
+    portfolio   — source-code dependency graph analysis
+    metrics     — hash-chained metrics recording + spend tracking
+    registry    — model resolution and spend pricing
+    adapters    — opengrep (sweep stages) and checkov (portfolio graph)
+    corpus      — population resolver the sweep stages read
 """
 
 from traust_engine.assets import harness_version as _harness_version

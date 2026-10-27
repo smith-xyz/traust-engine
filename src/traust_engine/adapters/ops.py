@@ -1,7 +1,10 @@
 """``HarnessEngine.adapters`` — scanner config injection, bound to context.
 
 Adapters stay stateless; this namespace only surfaces typed config from the
-injected context (rule-pack allowlist, safe_exec profiles, workspace root).
+injected context (rule-pack allowlist, rule pack) for the rule-lane stage.
+
+PENDING(decision: sweep stages) — kept for traust;
+deleted when traust retires or ports it.
 """
 
 from __future__ import annotations

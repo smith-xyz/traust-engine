@@ -1,38 +1,28 @@
 # traust-engine
 
-Processing library for Traust: scanner adapters, report tooling and deterministic
-workflows. Finding identity, disposition and persistence belong to traust-core,
-not the engine or app CLI. Import as `traust_engine`.
+The continuous-ops service for Traust, on traust-core: `traust_engine.ops` runs a
+pack's assets through traust-core services. Finding identity, disposition,
+persistence, tools and reporting belong to traust-core. Import as `traust_engine`.
 
 ## Architecture
 
 | Module | Role |
 |---|---|
-| `traust_engine.validation` | Scope enforcement and soundness gates |
-| `traust_engine.sweep.calibration` | Rule-pack calibration library API |
-| `traust_engine.adapters` | Scanner adapters (gitleaks, opengrep, …) |
-| `traust_engine.reporting` | Report validation, SARIF, render |
 | `traust_engine.ops` | Continuous ops: `Pack` (the pack's `assets.yaml`, checked against contracts `config/v1/pack`), the tick, admission and the reaper (`EngineLoop.run_once`), all through traust-core services |
 
-Finding identity, disposition and persisted finding reads belong to
-`traust_core.v1.services.findings`; the old engine cumulative replay is retired.
-Scanner adapters keep tool identity in `metadata.tool`, not finding `origin`.
-Native scanner fingerprints remain native scanner data, never invented Traust
-identity stamps. Supplied finding classifier/dependency metadata survives the
-typed bridge, and unknown severity or undeclared top-level fields are refused.
-Final artifact admission goes through core's `AdapterResultArtifact` and
-`ArtifactPublisher`; sparse scanner claims are not padded into audit findings.
+Kept for traust until Shaun's retire-or-port decisions land (each package is
+tagged `PENDING(decision: …)`); deleted when traust retires or ports it:
 
-Native scanner results use the adapter-specific observation contract.
-Unreported CWEs/description/remediation stay unreported; shared supplied-value
-constraints remain enforced. Authored report findings keep their strict schema.
-`tests/test_native_adapter_artifact.py` runs the real binary directly through
-`AdapterResultArtifact.from_document` without hand-completing fields.
-The real bundled token, DSN and encrypted-Vault publication regression also
-verifies that storing observations does not create canonical findings/verdicts.
+| Module | Kept for |
+|---|---|
+| `traust_engine.engine` | `HarnessEngine` facade: `.metrics`, `.models`, `.adapters`, `.sweep`, `.portfolio` |
+| `traust_engine.sweep` | sweep stages: collect, draft, sweep, emit, benchmark, rule lane, mining, calibration |
+| `traust_engine.portfolio` | portfolio graph layers |
+| `traust_engine.metrics`, `traust_engine.registry` | metrics journal and spend pricing |
+| `traust_engine.adapters` | opengrep (sweep stages) and checkov (portfolio graph) |
+| `traust_engine.corpus` | the report population the sweep stages read |
 
-Rule packs ship under `data/secure-code-audit/` (`opengrep-rules/`,
-`gitleaks-rules/`). This library ships **no configuration files and never loads
+The opengrep rule pack ships under `data/secure-code-audit/opengrep-rules/`. This library ships **no configuration files and never loads
 config itself — it is a pure consumer.** A caller builds the context once
 (`traust_contracts.load_context()`, done for you by
 `HarnessEngine.load(config_home=…)`) and the engine receives it *injected*: the
@@ -107,13 +97,10 @@ holds every config file; edit them there (the AWS/SSH model).
 | `locations.yaml` → `progress_tracker` | Metrics journal + dashboard output root |
 | `locations.yaml` → `feeds_cache` | Feed cache directory |
 | `locations.yaml` → `portfolio_graph` | Portfolio graph DB (defaults under `analysis_results`) |
-| `locations.yaml` → `gitleaks_config` | Gitleaks TOML (overrides the bundled default) |
 | `locations.yaml` → `opengrep_rules` | Opengrep rule pack dir (overrides the bundled default) |
-| `locations.yaml` → `product_definitions` | Product/ownership registry endpoint (optional) |
-| `locations.yaml` → `sarif_tool_uri` | SARIF `informationUri` (optional; omitted when unset) |
 
 Secrets and OS/tool standards stay environment-driven (`GITHUB_TOKEN`, signing key
-material, `XDG_*`, `JAVA_OPTS`, `SAFE_EXEC_DISABLED`).
+material, `XDG_*`, `JAVA_OPTS`).
 
 No config ships in the wheel. Templates for every operational file live in the
 harness repo as `config/*.example.*`; `install_traust` copies them into
@@ -135,7 +122,7 @@ Manual equivalents:
 uv run ruff check .
 uv run ruff format --check .
 uv run pytest -m "not integration" -q   # unit tests (no external binaries)
-uv run pytest -q                        # full suite; integration skips when gitleaks/opengrep absent
+uv run pytest -q                        # full suite; integration skips when opengrep is absent
 uv build
 ```
 
