@@ -11,7 +11,6 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from traust_contracts import DeploymentConfigMissing
 from traust_core.v1.context import Context
 from traust_core.v1.errors import ConfigError
 from traust_core.v1.models.cloud_config import CHECKOV
@@ -30,7 +29,7 @@ def _resolved_feeds_cache(feeds_cache: Callable[[], Path] | None) -> Path | None
         return None
     try:
         return feeds_cache()
-    except (ConfigError, DeploymentConfigMissing):
+    except (ConfigError, FileNotFoundError):
         # Opt-in: a deployment that hasn't configured a feeds cache (traust's
         # `feeds_cache_dir` raises DeploymentConfigMissing when `progress_tracker` is also
         # unset) keeps scanning its tools' native caches exactly as before the image split,
