@@ -26,9 +26,14 @@ _FREEZE_FLAGS: dict[str, list[str]] = {
 def freeze_env(tool_name: str, *, db_dir: str | None = None) -> dict[str, str]:
     """Return env vars that disable auto-update for *tool_name*.
 
-    For govulncheck, *db_dir* sets ``GOVULNDB`` to a local file mirror.
+    *db_dir* points the tool at a feeds-cache mount instead of its native cache: for grype,
+    ``GRYPE_DB_CACHE_DIR``; for govulncheck, ``GOVULNDB`` (the ``-db file://`` CLI flag is the
+    primary mechanism — see ``adapters.govulncheck.command`` — but the env var keeps any
+    subprocess govulncheck spawns internally pointed at the same database).
     """
     env = dict(_FREEZE_ENV.get(tool_name, {}))
+    if db_dir and tool_name == "grype":
+        env["GRYPE_DB_CACHE_DIR"] = db_dir
     if tool_name == "govulncheck" and db_dir:
         env["GOVULNDB"] = f"file://{db_dir}"
     return env

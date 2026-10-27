@@ -22,18 +22,31 @@ _GRYPE_DB_DIR = Path(
 )
 
 
-def _parse_grype_db_status() -> DBInfo:
-    """Parse ``grype db status`` output for build date and schema."""
+def grype_db_present(db_dir: Path) -> bool:
+    """Whether *db_dir* holds a grype vulnerability database, by the layout grype itself reads
+    (``<schema>/vulnerability.db``). Shared by the status check and the scan-time preflight so
+    the two can never disagree about what counts as "present"."""
+    return db_dir.is_dir() and any(db_dir.glob("*/vulnerability.db"))
+
+
+def _parse_grype_db_status(db_dir: Path | None = None) -> DBInfo:
+    """Parse ``grype db status`` output for build date and schema.
+
+    *db_dir* pins the check to a feeds-cache mount (passed as ``GRYPE_DB_CACHE_DIR`` to the
+    status probe); without it, grype's own native cache location applies.
+    """
+    env = {**os.environ, "GRYPE_DB_CACHE_DIR": str(db_dir)} if db_dir else None
     try:
         proc = subprocess.run(
             ["grype", "db", "status"],
             capture_output=True,
             text=True,
             timeout=15,
+            env=env,
         )
         text = proc.stdout + proc.stderr
     except (subprocess.SubprocessError, OSError):
-        return DBInfo(exists=False)
+        text = ""
 
     built = None
     schema = None
@@ -46,21 +59,31 @@ def _parse_grype_db_status() -> DBInfo:
         elif m := re.match(r"^\s*Location:\s*(.+)", line):
             location = m.group(1).strip()
 
-    db_dir = Path(location) if location else _GRYPE_DB_DIR
-    exists = any(db_dir.glob("*/vulnerability.db")) if db_dir.is_dir() else False
+    checked_dir = db_dir or (Path(location) if location else _GRYPE_DB_DIR)
+    exists = grype_db_present(checked_dir)
 
     return DBInfo(
-        exists=exists or built is not None, built=built, schema_version=schema, path=str(db_dir)
+        exists=exists or built is not None,
+        built=built,
+        schema_version=schema,
+        path=str(checked_dir),
     )
 
 
-def _parse_govulncheck_db_status() -> DBInfo:
-    """govulncheck DB info is extracted from scan output, not a status command.
+def govulncheck_db_present(db_dir: Path) -> bool:
+    """Whether *db_dir* holds an extracted Go vulnerability database (``vulndb.zip``'s layout:
+    ``index/`` and ``ID/``). Shared by the status check and the scan-time preflight."""
+    return db_dir.is_dir() and (db_dir / "index").is_dir() and (db_dir / "ID").is_dir()
 
-    This parser returns a stub; the real DB metadata comes from parsing
-    the govulncheck -json config record during scan (see govulncheck adapter).
-    """
-    return DBInfo(exists=True)
+
+def _parse_govulncheck_db_status(db_dir: Path | None = None) -> DBInfo:
+    """govulncheck keeps no native local cache by default (it queries vuln.go.dev live unless
+    pointed at an extracted database with ``-db file://``). Without *db_dir* there is nothing to
+    check, so a workstation scan is left to govulncheck's own live-query behaviour; with it, the
+    feeds-cache mount is checked for the layout ``-db file://`` reads."""
+    if db_dir is None:
+        return DBInfo(exists=True)
+    return DBInfo(exists=govulncheck_db_present(db_dir), path=str(db_dir))
 
 
 _PARSERS: dict[str, callable] = {
@@ -84,11 +107,12 @@ _NO_DB_TOOLS = {
 }
 
 
-def db_status(tool_name: str) -> DBInfo | None:
-    """Return DB status for *tool_name*, or None if the tool has no DB."""
+def db_status(tool_name: str, db_dir: Path | None = None) -> DBInfo | None:
+    """Return DB status for *tool_name*, or None if the tool has no DB. *db_dir* checks a
+    feeds-cache mount instead of the tool's native cache location (grype, govulncheck only)."""
     if tool_name in _NO_DB_TOOLS:
         return None
     parser = _PARSERS.get(tool_name)
     if parser is None:
         return None
-    return parser()
+    return parser(db_dir)

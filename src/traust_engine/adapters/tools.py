@@ -80,6 +80,9 @@ class AdapterTool(Generic[Res]):
     pin: Mapping[str, Any] = field(default_factory=dict)  # the binary's external-tools.yaml row
     # The argv `scan` runs, for adapters that build it from the target alone.
     argv: Callable[[Any], Sequence[str]] | None = None
+    # The feeds-cache mount this tool's database reads from (grype, govulncheck); None keeps the
+    # tool's native cache location, unchanged from before the image split.
+    db_dir: Path | None = None
 
     def check(self) -> Readiness:
         if self.binaries and not (found := on_path(*self.binaries, missing=" not on PATH")).ready:
@@ -120,9 +123,18 @@ class AdapterTool(Generic[Res]):
 
     def database(self) -> DatabaseStatus | None:
         binary = self._binary
+        # Gated on POPULATABLE_TOOLS (grype only), matching ProviderCatalog.fetch_databases'
+        # assumption in traust-core that `database() is not None` means `update_database()` works
+        # (it tries every such tool and has no populatable-only filter of its own). Exposing
+        # govulncheck's now-real database status through this protocol needs that core-side
+        # distinction first — NEED(core: ProviderCatalog.fetch_databases to filter populatable
+        # tools itself, not infer it from database() being set). Until then, govulncheck's
+        # database presence is still checked where it matters: the scan-time preflight in
+        # `adapters.govulncheck._run_govulncheck`, via `toolchain.db_status(..., db_dir=...)`
+        # directly.
         if (
             binary not in toolchain.POPULATABLE_TOOLS
-            or (info := toolchain.db_status(binary)) is None
+            or (info := toolchain.db_status(binary, db_dir=self.db_dir)) is None
         ):
             return None
         return DatabaseStatus(
@@ -177,6 +189,7 @@ def register_tools(
     allowlist: opengrep.RulePackAllowlist | None = None,
     yara_rules: Sequence[str] = (),
     osv_client: Callable[[], OsvClient] = OsvClient,
+    feeds_cache: Path | None = None,
 ) -> None:
     """Register every engine scanner in `ctx.tools` (Checkov included, through
     `register_checkov`) and the pins' `expected` versions as `ctx.tool_floors`.
@@ -184,11 +197,16 @@ def register_tools(
     `profile_map` is the deployment's safe_exec profiles (`AdaptersOps.safe_exec_profile_map()`),
     `pins` external-tools.yaml (`ToolchainOps.pins()`), `rule_pack` / `allowlist` the opengrep
     pack and supplemental-pack allowlist, `yara_rules` pinned `url@sha` sources (empty: the
-    adapter's pinned default).
+    adapter's pinned default). `feeds_cache`, when given, points grype and govulncheck at
+    `<feeds_cache>/tool-dbs/<tool>` instead of their native caches; a missing or unusable database
+    there raises before the scan starts (ScannerDatabaseUnavailable), never a silent zero.
     """
     clock = ctx.clock
     profiles = dict(profile_map)
     rules = list(yara_rules)
+
+    def tool_db_dir(name: str) -> Path | None:
+        return None if feeds_cache is None else feeds_cache / "tool-dbs" / name
 
     def tool(
         name: str, binaries: tuple[str, ...], scan: Callable[[Any], Any], **kw: Any
@@ -216,11 +234,16 @@ def register_tools(
         tool(
             "govulncheck",
             ("govulncheck", "go"),
-            lambda w: govulncheck.scan(w, profile_map=profiles),
-            argv=lambda _: govulncheck.command(),
+            lambda w: govulncheck.scan(w, profile_map=profiles, db_dir=tool_db_dir("govulncheck")),
+            argv=lambda _: govulncheck.command(db_dir=tool_db_dir("govulncheck")),
+            db_dir=tool_db_dir("govulncheck"),
         ),
         tool(  # DB frozen by default
-            "grype", ("grype",), lambda w: grype.scan(w), argv=lambda w: grype.command(str(w))
+            "grype",
+            ("grype",),
+            lambda w: grype.scan(w, db_dir=tool_db_dir("grype")),
+            argv=lambda w: grype.command(str(w)),
+            db_dir=tool_db_dir("grype"),
         ),
         tool(
             "joern",

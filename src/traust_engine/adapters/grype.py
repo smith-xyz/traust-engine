@@ -54,12 +54,17 @@ def _run_grype(
     *,
     freeze: bool = True,
     output_format: str = "json",
+    db_dir: Path | None = None,
 ) -> dict[str, Any]:
-    from traust_engine.toolchain import freeze_env
+    from traust_engine.toolchain import freeze_env, grype_db_present
+    from traust_engine.toolchain._errors import ScannerDatabaseUnavailable
+
+    if db_dir is not None and not grype_db_present(db_dir):
+        raise ScannerDatabaseUnavailable(f"grype: no vulnerability database at {db_dir}")
 
     env = dict(os.environ)
     if freeze:
-        env.update(freeze_env("grype"))
+        env.update(freeze_env("grype", db_dir=str(db_dir) if db_dir else None))
 
     cmd = command(target, grype_bin, output_format)
     proc = subprocess.run(
@@ -133,14 +138,18 @@ def scan(
     grype_bin: str = "grype",
     *,
     freeze: bool = True,
+    db_dir: Path | None = None,
 ) -> AdapterResult:
     """Run grype and return typed scan result.
 
     *target* can be an SBOM path (``sbom:<path>``) or a directory.
     *freeze* (default True) disables grype's DB auto-update.
+    *db_dir*, when given, points grype at a feeds-cache mount instead of its native cache
+    (``GRYPE_DB_CACHE_DIR``) and raises :class:`ScannerDatabaseUnavailable` before running when
+    that mount has no usable database — never a silent zero-finding scan.
     """
     target_str = str(target)
-    doc = _run_grype(target_str, timeout, grype_bin, freeze=freeze)
+    doc = _run_grype(target_str, timeout, grype_bin, freeze=freeze, db_dir=db_dir)
 
     return build_scan_result(
         target_str,
