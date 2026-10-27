@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,12 @@ from traust_core.v1.errors import NotFoundError
 from traust_core.v1.models.artifacts import RunManifestArtifact
 from traust_core.v1.models.common import every_item
 from traust_core.v1.models.operations import (
+    OPEN_ORDER_STATES,
     JobResult,
     OrderFilter,
     OrderRequest,
     OrderState,
+    Refusal,
     Route,
     RunOrder,
     WorkerId,
@@ -87,6 +90,14 @@ def _drain(services: Services, result: JobResult = SUCCEEDED) -> list[RunOrder]:
     while (order := services.ops.claim(WORKER, LEASE)) is not None:
         done.append(services.ops.complete(order.id, WORKER, result))  # type: ignore[arg-type]
     return done
+
+
+def _materialize(services: Services, asset: str, repository_id: UUID | None) -> None:
+    order = services.ops.start(
+        OrderRequest(asset=asset, priority=20, repository_id=repository_id), ENGINE, WORKER, LEASE
+    )
+    assert order.id is not None
+    services.ops.complete(order.id, WORKER, SUCCEEDED)
 
 
 def _pack(tmp_path: Path, **changes: dict[str, Any]) -> Pack:
@@ -229,9 +240,12 @@ def test_every_route_with_a_lane_plans_its_lane_asset_once(tmp_path: Path) -> No
 
 def test_routing_the_same_repository_again_plans_no_second_order(tmp_path: Path) -> None:
     pack = _iac_pack(tmp_path)
-    services, clock, _ = _routed_once(tmp_path, pack, TableAndAdditiveRouter())
+    services, clock, repo = _routed_once(tmp_path, pack, TableAndAdditiveRouter())
     first = _routed_orders(services)
-    # A restarted engine has no routed-until mark, so it routes the same materialization again.
+    # A restarted engine resumes after the last routed order; repo_state materializing again
+    # routes the same repository again.
+    clock.at += timedelta(minutes=1)
+    _materialize(services, "repo_state", repo)
     report = EngineLoop(services, clock, pack, TableAndAdditiveRouter(), lambda r: r).run_once()
     assert report.tick.routed == 1
     assert _routed_orders(services) == first
@@ -575,3 +589,104 @@ def test_a_shadow_pass_lists_routed_orders_once_per_materialization(tmp_path: Pa
     assert _orders(services, OrderState.PLANNED) == []
     clock.at += timedelta(minutes=1)
     assert all(r.asset != "diff_scan" for r in loop.shadow_once().due)
+
+
+class RefusalRouter:
+    """Routes every repository to `lane`, or to `instead` when it was refused; keeps the
+    refusals it was given."""
+
+    def __init__(self, lane: str = "diff-scan", instead: str | None = None) -> None:
+        self.lane, self.instead = lane, instead
+        self.refusals: list[Refusal] = []
+
+    def route(self, state: UUID, events: object, refusals: Sequence[Refusal]) -> tuple[Route, ...]:
+        self.refusals += refusals
+        lane = self.instead if refusals and self.instead else self.lane
+        return (Route(lane=lane, priority=1, reason="rule-4"),)  # type: ignore[arg-type]
+
+
+def _scans(services: Services, *states: OrderState) -> list[RunOrder]:
+    return [o for o in _orders(services, *states) if o.asset == "diff_scan"]
+
+
+def _refuse_the_scan(services: Services) -> RunOrder:
+    """Routed and admitted, the repository's scan is refused (everything else succeeds)."""
+    (scan,) = _scans(services, OrderState.QUEUED)
+    assert scan.id is not None
+    services.ops.start(
+        OrderRequest(asset="diff_scan", priority=1, repository_id=scan.repository_id),
+        ENGINE,
+        WORKER,
+        LEASE,
+    )
+    services.ops.complete(scan.id, WORKER, JobResult.refused("diff-too-large"))
+    _drain(services)
+    return scan
+
+
+def _routed_loop(tmp_path: Path, router: RefusalRouter) -> tuple[Services, Clock, EngineLoop]:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    _repositories(services, 1)
+    loop = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    assert loop.run_once().tick.routed == 1
+    return services, clock, loop
+
+
+def test_a_refused_repository_is_re_routed_with_its_refusal_and_never_loops(
+    tmp_path: Path,
+) -> None:
+    router = RefusalRouter()
+    services, _, loop = _routed_loop(tmp_path, router)
+    scan = _refuse_the_scan(services)
+
+    again = loop.run_once().tick
+    assert (again.routed, again.refused_again) == (1, 1)
+    assert router.refusals == [
+        Refusal(subject=str(scan.repository_id), lane="diff-scan", reason="diff-too-large")  # type: ignore[arg-type]
+    ]
+    assert _scans(services, *OPEN_ORDER_STATES) == []
+    assert loop.run_once().tick.routed == 0  # no loop: nothing new since
+
+    _materialize(services, "repo_state", scan.repository_id)
+    assert loop.run_once().tick.routed == 1
+    (planned,) = _scans(services, *OPEN_ORDER_STATES)
+    assert planned.lane == "diff-scan"
+
+
+def test_a_refusal_routed_into_another_lane_is_planned(tmp_path: Path) -> None:
+    router = RefusalRouter(instead="diff-scan-quarterly")
+    services, _, loop = _routed_loop(tmp_path, router)
+    _refuse_the_scan(services)
+    assert loop.run_once().tick.refused_again == 0
+    (planned,) = _scans(services, *OPEN_ORDER_STATES)
+    assert planned.lane == "diff-scan-quarterly"
+
+
+def test_a_restart_resumes_routing_after_the_last_routed_order(tmp_path: Path) -> None:
+    router = RefusalRouter()
+    services, clock, _ = _routed_loop(tmp_path, router)
+    restarted = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    assert restarted.run_once().tick.routed == 0
+
+
+def test_a_restart_with_nothing_routed_looks_back_one_cadence(tmp_path: Path) -> None:
+    router = RefusalRouter()
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    _repositories(services, 2)
+    EngineLoop(services, clock, Pack.load(PACK)).run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    restarted = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    assert restarted.run_once().tick.routed == 2
+
+
+def test_a_router_needs_the_feed(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    with pytest.raises(ValueError):
+        Controller(Pack.load(PACK), services.ops, clock, LaneRouter(), state_of=lambda r: r)
