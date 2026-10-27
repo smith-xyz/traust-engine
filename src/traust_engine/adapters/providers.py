@@ -11,6 +11,7 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from traust_contracts import DeploymentConfigMissing
 from traust_core.v1.context import Context
 from traust_core.v1.errors import ConfigError
 from traust_core.v1.models.cloud_config import CHECKOV
@@ -24,6 +25,19 @@ from traust_engine.adapters.tools import TOOL_NAMES, register_tools
 from traust_engine.engine import HarnessEngine
 
 
+def _resolved_feeds_cache(feeds_cache: Callable[[], Path] | None) -> Path | None:
+    if feeds_cache is None:
+        return None
+    try:
+        return feeds_cache()
+    except (ConfigError, DeploymentConfigMissing):
+        # Opt-in: a deployment that hasn't configured a feeds cache (traust's
+        # `feeds_cache_dir` raises DeploymentConfigMissing when `progress_tracker` is also
+        # unset) keeps scanning its tools' native caches exactly as before the image split,
+        # rather than failing every scan on a setting only the deployed runtime needs.
+        return None
+
+
 class _OnFirstUse:
     """A provider built on its first attribute read."""
 
@@ -35,10 +49,21 @@ class _OnFirstUse:
 
 
 def register_providers(
-    ctx: Context, engine: Callable[[], HarnessEngine], *, canaries: str = "canaries"
+    ctx: Context,
+    engine: Callable[[], HarnessEngine],
+    *,
+    canaries: str = "canaries",
+    feeds_cache: Callable[[], Path] | None = None,
 ) -> None:
     """ADR and docs sources, fleet-fix applier and golden runner, rule-pack source and canary
-    materialiser (`recall-benchmark/<canaries>`), and every scanner tool with its floors."""
+    materialiser (`recall-benchmark/<canaries>`), and every scanner tool with its floors.
+
+    `feeds_cache`, when given, resolves the feeds-cache root on first tool use (same timing as
+    `engine`); grype and govulncheck then read their databases from
+    `<feeds_cache>/tool-dbs/<tool>` instead of their native caches. Unresolvable (e.g. no
+    `progress_tracker` configured on a laptop install) falls back to native caches rather than
+    blocking every tool on a setting only the deployed runtime needs.
+    """
 
     @cache
     def configured() -> Context:
@@ -64,6 +89,7 @@ def register_providers(
             pins=loaded.toolchain.pins(),
             rule_pack=pack,
             allowlist=loaded.adapters.allowlist_for_opengrep(),
+            feeds_cache=_resolved_feeds_cache(feeds_cache),
         )
         ctx.tool_floors.update(staged.tool_floors)
         return staged

@@ -220,9 +220,16 @@ def _candidates_to_findings(candidates: list[dict]) -> list[dict[str, Any]]:
     return findings
 
 
-def command(govulncheck_bin: str = "govulncheck") -> list[str]:
-    """The argv a govulncheck scan runs, from inside the checkout."""
-    return [govulncheck_bin, "-json", "./..."]
+def command(govulncheck_bin: str = "govulncheck", db_dir: Path | None = None) -> list[str]:
+    """The argv a govulncheck scan runs, from inside the checkout.
+
+    *db_dir*, when given, adds ``-db file://<db_dir>`` so the scan reads the feeds-cache mount
+    explicitly rather than querying vuln.go.dev live (scanner-currency-plan.md, "Target state").
+    """
+    cmd = [govulncheck_bin, "-json"]
+    if db_dir is not None:
+        cmd += ["-db", f"file://{db_dir}"]
+    return [*cmd, "./..."]
 
 
 def _run_govulncheck(
@@ -232,16 +239,22 @@ def _run_govulncheck(
     *,
     profile_map: dict | None = None,
     freeze: bool = True,
+    db_dir: Path | None = None,
 ) -> tuple[int, str, str, dict, list]:
     """Execute govulncheck under safe_exec and parse its JSON stream."""
     from traust_engine._util import safe_exec
+    from traust_engine.toolchain import govulncheck_db_present
+    from traust_engine.toolchain._errors import ScannerDatabaseUnavailable
 
-    cmd = command(govulncheck_bin)
+    if db_dir is not None and not govulncheck_db_present(db_dir):
+        raise ScannerDatabaseUnavailable(f"govulncheck: no vulnerability database at {db_dir}")
+
+    cmd = command(govulncheck_bin, db_dir=db_dir)
     extra_env = {}
     if freeze:
         from traust_engine.toolchain import freeze_env
 
-        extra_env = freeze_env("govulncheck")
+        extra_env = freeze_env("govulncheck", db_dir=str(db_dir) if db_dir else None)
 
     rc, out, err = safe_exec.run(
         cmd,
@@ -262,6 +275,7 @@ def scan(
     *,
     freeze: bool = True,
     profile_map: dict | None = None,
+    db_dir: Path | None = None,
 ) -> AdapterResult:
     """Run govulncheck and return typed scan result.
 
@@ -269,6 +283,9 @@ def scan(
     (govulncheck uses ``GOVULNDB`` for a local DB mirror).
     *profile_map* must come from ``AdaptersOps.safe_exec_profile_map()`` when
     running under a loaded engine; omit only in unit tests.
+    *db_dir*, when given, points the scan at a feeds-cache mount (``-db file://<db_dir>``) and
+    raises :class:`ScannerDatabaseUnavailable` before running when that mount has no usable
+    database — never a silent zero-finding scan.
     """
     repo = repo.resolve()
     if not (repo / "go.mod").exists() and not list(repo.glob("*/go.mod")):
@@ -280,6 +297,7 @@ def scan(
         govulncheck_bin,
         profile_map=profile_map,
         freeze=freeze,
+        db_dir=db_dir,
     )
     if not tool:
         raise RuntimeError(f"govulncheck produced no scan output (exit {rc}): {err.strip()[:500]}")
