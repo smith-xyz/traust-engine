@@ -202,6 +202,19 @@ def _render_finding(f: dict) -> str:
     if f.get("category"):
         meta_rows.append(["**Category**", f["category"]])
 
+    if "remediation_effort" in f:
+        effort = f["remediation_effort"]
+        meta_rows.append(["**Remediation Effort**", "-" if effort is None else effort])
+
+    if "blocked_external" in f:
+        blocked = f["blocked_external"]
+        meta_rows.append(
+            [
+                "**Blocked Externally**",
+                "true" if blocked is True else "false" if blocked is False else blocked,
+            ]
+        )
+
     parts.append(_table(["", ""], meta_rows))
     parts.append("")
 
@@ -260,21 +273,23 @@ def render_findings_summary(summary: list[dict]) -> str:
 
 def render_remediation_roadmap(roadmap: list[dict]) -> str:
     parts = ["## 5. Remediation Roadmap\n"]
-    has_effort = any(r.get("effort") for r in roadmap)
+    has_effort = any("effort" in r for r in roadmap)
+    has_blocking = any("blocked_external" in r for r in roadmap)
+    headers = ["Priority", "Action", "Addresses"]
     if has_effort:
-        headers = ["Priority", "Action", "Addresses", "Effort"]
-        rows = [
-            [
-                f"**{r['priority']}**",
-                r["action"],
-                ", ".join(r["addresses"]),
-                r.get("effort", ""),
-            ]
-            for r in roadmap
-        ]
-    else:
-        headers = ["Priority", "Action", "Addresses"]
-        rows = [[f"**{r['priority']}**", r["action"], ", ".join(r["addresses"])] for r in roadmap]
+        headers.append("Effort")
+    if has_blocking:
+        headers.append("Blocked Externally")
+    rows = []
+    for r in roadmap:
+        row = [f"**{r['priority']}**", r["action"], ", ".join(r["addresses"])]
+        if has_effort:
+            effort = r.get("effort", "")
+            row.append("-" if effort is None else effort)
+        if has_blocking:
+            blocked = r.get("blocked_external", "")
+            row.append("true" if blocked is True else "false" if blocked is False else blocked)
+        rows.append(row)
     parts.append(_table(headers, rows))
     return "\n".join(parts)
 
