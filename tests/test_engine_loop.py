@@ -18,6 +18,12 @@ from traust_core.v1.context.context import Services
 from traust_core.v1.errors import NotFoundError
 from traust_core.v1.models.artifacts import RunManifestArtifact
 from traust_core.v1.models.common import every_item
+from traust_core.v1.models.inventory import (
+    ProductSlug,
+    RecordedRelease,
+    ReleaseCommit,
+    VersionLabel,
+)
 from traust_core.v1.models.operations import (
     OPEN_ORDER_STATES,
     JobResult,
@@ -29,7 +35,7 @@ from traust_core.v1.models.operations import (
     RunOrder,
     WorkerId,
 )
-from traust_core.v1.models.values import HttpsRepoUrl
+from traust_core.v1.models.values import GitSha, HttpsRepoUrl
 from traust_core.v1.services.artifact_publishing import PublishSpec, PublishSpecs
 
 from traust_engine.ops.controller import ENGINE, Controller
@@ -690,3 +696,69 @@ def test_a_router_needs_the_feed(tmp_path: Path) -> None:
     services = _context(tmp_path, clock).services()
     with pytest.raises(ValueError):
         Controller(Pack.load(PACK), services.ops, clock, LaneRouter(), state_of=lambda r: r)
+
+
+class ReleaseRouter:
+    """Routes a repository to diff-scan-quarterly for each release it was given; keeps them."""
+
+    def __init__(self) -> None:
+        self.releases: dict[UUID, list[RecordedRelease]] = {}
+
+    def route(
+        self, state: UUID, events: Sequence[RecordedRelease], refusals: object
+    ) -> tuple[Route, ...]:
+        self.releases.setdefault(state, []).extend(events)
+        lane = "diff-scan-quarterly" if events else None
+        return (Route(lane=lane, priority=1, reason="release"),)  # type: ignore[arg-type]
+
+
+def _release(services: Services, version: str, *repositories: UUID) -> RecordedRelease:
+    product = services.portfolio.find_product(ProductSlug("ocp")) or (
+        services.portfolio.register_product(ProductSlug("ocp"), "OCP")
+    )
+    commits = [
+        ReleaseCommit(
+            url=HttpsRepoUrl.parse(services.portfolio.get_repository(r).url, ["github.com"]),
+            sha=GitSha("a" * 40),
+        )
+        for r in repositories
+    ]
+    release = services.portfolio.import_release(product.id, VersionLabel(version), commits)  # type: ignore[arg-type]
+    return services.portfolio.recorded_release(release.id)  # type: ignore[arg-type]
+
+
+def test_a_recorded_release_routes_each_repository_it_ships_once(tmp_path: Path) -> None:
+    router = ReleaseRouter()
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    shipped, other, left_out = _repositories(services, 3)
+    loop = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    first = _release(services, "4.19", shipped, other)
+    clock.at += timedelta(minutes=10)
+    assert loop.run_once().tick.routed == 2
+    assert router.releases == {shipped: [first], other: [first]}
+    assert first.change is None
+    planned = _scans(services, *OPEN_ORDER_STATES)
+    assert sorted((o.repository_id, o.lane, o.rule) for o in planned) == sorted(
+        (r, "diff-scan-quarterly", "release") for r in (shipped, other)
+    )
+
+    router.releases.clear()
+    assert loop.run_once().tick.routed == 0
+    second = _release(services, "4.20", shipped)
+    assert loop.run_once().tick.routed == 1
+    assert router.releases == {shipped: [second]}
+    assert second.change is not None and second.change.remodels()
+    assert left_out not in router.releases
+
+
+def test_a_restart_does_not_replay_releases_routed_before_it(tmp_path: Path) -> None:
+    router = ReleaseRouter()
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    _release(services, "4.19", repo)
+    assert EngineLoop(services, clock, Pack.load(PACK), router, lambda r: r).run_once().tick.routed
+    router.releases.clear()
+    restarted = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    assert restarted.run_once().tick.routed == 0 and router.releases == {}
