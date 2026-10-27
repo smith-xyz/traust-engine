@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Callable, Collection
 from datetime import datetime
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar
 from uuid import UUID
 
 import pydantic
@@ -27,7 +27,6 @@ from traust_core.v1.models.operations import (
 from traust_core.v1.models.vocabulary import ActorKind
 from traust_core.v1.providers.clock import Clock
 from traust_core.v1.services.operations import FeedQuery, OpsService, Router
-from traust_core.v1.services.portfolio import PortfolioService
 
 from traust_engine.ops.pack import Pack
 
@@ -52,6 +51,12 @@ class TickReport(Model):
     unrunnable: tuple[AssetName, ...] = ()
 
 
+class Releases(Protocol):
+    """The one portfolio read the router needs; `Context.services().portfolio` satisfies it."""
+
+    def recorded_release(self, release_id: UUID) -> RecordedRelease: ...
+
+
 class Controller(Generic[S]):
     def __init__(
         self,
@@ -61,7 +66,7 @@ class Controller(Generic[S]):
         router: Router[S, RecordedRelease] | None = None,
         state_of: Callable[[UUID], S] | None = None,
         feed: FeedQuery | None = None,
-        portfolio: PortfolioService | None = None,
+        portfolio: Releases | None = None,
     ) -> None:
         if (router is None) != (state_of is None) or (
             router is not None and (feed is None or portfolio is None)
