@@ -88,8 +88,12 @@ def test_a_second_registration_is_refused(tmp_path: Path) -> None:
     [
         ("gitleaks", gitleaks, {"mode": "dir", "loc": None}),
         ("gitleaks-history", gitleaks, {"mode": "history", "loc": None}),
-        ("govulncheck", govulncheck, {"profile_map": {"go-scan": {"marker": True}}}),
-        ("grype", grype, {}),
+        (
+            "govulncheck",
+            govulncheck,
+            {"profile_map": {"go-scan": {"marker": True}}, "db_dir": None},
+        ),
+        ("grype", grype, {"db_dir": None}),
         ("yara", yara, {"rules": ["https://example.invalid/rules@" + "a" * 40]}),
     ],
 )
@@ -211,7 +215,7 @@ def test_the_catalog_stamps_versions_and_grypes_database(
     monkeypatch.setattr(
         tools.toolchain,
         "db_status",
-        lambda b: DBInfo(
+        lambda b, db_dir=None: DBInfo(
             exists=True, built="2026-10-23T01:31:46Z", schema_version="v6.0.2", path="/db"
         ),
     )
@@ -244,7 +248,7 @@ def test_fetch_databases_updates_only_grype(
 ) -> None:
     populated: list[str] = []
     monkeypatch.setattr(tools.toolchain, "populate", lambda b: populated.append(b) or (True, "ok"))
-    monkeypatch.setattr(tools.toolchain, "db_status", lambda b: DBInfo(exists=True))
+    monkeypatch.setattr(tools.toolchain, "db_status", lambda b, db_dir=None: DBInfo(exists=True))
     [db] = _ctx(tmp_path).services().catalog.fetch_databases()
     assert populated == ["grype"] and db.tool == "grype"
 
@@ -355,7 +359,9 @@ def test_grype_records_the_argv_it_ran_and_its_database_build_time(
     monkeypatch.setattr(grype, "subprocess", SimpleNamespace(run=run))
     monkeypatch.setattr(grype, "_tool_version", lambda b: "0.115.0")
     monkeypatch.setattr(
-        tools.toolchain, "db_status", lambda b: DBInfo(exists=True, built="2026-10-23T01:31:46Z")
+        tools.toolchain,
+        "db_status",
+        lambda b, db_dir=None: DBInfo(exists=True, built="2026-10-23T01:31:46Z"),
     )
     result = _ctx(tmp_path).tools.get("grype").acquire(tools.ToolRequest(workspace=tmp_path))
     assert result.acquisition.argv_sha256 == argv_digest(ran[0])

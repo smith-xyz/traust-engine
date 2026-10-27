@@ -64,7 +64,7 @@ def test_govulncheck_scan_without_profile_map_warns(tmp_path, caplog, monkeypatc
     repo.mkdir()
     (repo / "go.mod").write_text("module example.com/x\n\ngo 1.21\n", encoding="utf-8")
 
-    def fake_run_govulncheck(_repo, _timeout, _bin, *, profile_map=None, freeze=True):
+    def fake_run_govulncheck(_repo, _timeout, _bin, *, profile_map=None, freeze=True, db_dir=None):
         safe_exec.profiles(profile_map=profile_map)
         return 0, '{"version":"v1.0.0"}\n', "", {"version": "v1.0.0"}, []
 

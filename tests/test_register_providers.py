@@ -99,3 +99,54 @@ def test_an_unresolvable_rule_pack_is_a_config_error(tmp_path: Path, home: Path)
     (home / "locations.yaml").write_text("opengrep_rules: s3://bucket/rules\n")
     with pytest.raises(ConfigError, match="no local path form"):
         _ctx(tmp_path, home).tools.get("opengrep")
+
+
+def _ctx_with_feeds_cache(tmp_path: Path, home: Path, feeds_cache) -> Context:
+    def engine() -> HarnessEngine:
+        return HarnessEngine(load_context(config_home=home))
+
+    ctx = Context(Config(home=tmp_path / "store"))
+    register_providers(ctx, engine, feeds_cache=feeds_cache)
+    return ctx
+
+
+def test_feeds_cache_points_grype_and_govulncheck_at_their_tool_dbs_subdir(
+    tmp_path: Path, home: Path
+) -> None:
+    cache = tmp_path / "feeds"
+    ctx = _ctx_with_feeds_cache(tmp_path, home, lambda: cache)
+    assert ctx.tools.get("grype").db_dir == cache / "tool-dbs" / "grype"
+    assert ctx.tools.get("govulncheck").db_dir == cache / "tool-dbs" / "govulncheck"
+    # Tools without a tracked database are never given one.
+    assert ctx.tools.get("gitleaks").db_dir is None
+
+
+def test_no_feeds_cache_configured_leaves_tools_on_their_native_caches(
+    tmp_path: Path, home: Path
+) -> None:
+    ctx = _ctx(tmp_path, home)
+    assert ctx.tools.get("grype").db_dir is None
+    assert ctx.tools.get("govulncheck").db_dir is None
+
+
+def test_an_unresolvable_feeds_cache_falls_back_to_native_caches_not_a_hard_failure(
+    tmp_path: Path, home: Path
+) -> None:
+    """A laptop install with no `progress_tracker` configured keeps scanning as it did before
+    the image split, rather than failing every tool on a setting only the deployed runtime
+    needs (feeds_cache_dir in `traust` raises ConfigError/DeploymentConfigMissing there)."""
+    unresolvable = lambda: (_ for _ in ()).throw(DeploymentConfigMissing("no progress_tracker"))  # noqa: E731
+    ctx = _ctx_with_feeds_cache(tmp_path, home, unresolvable)
+    assert ctx.tools.get("grype").db_dir is None
+    assert ctx.tools.get("govulncheck").db_dir is None
+
+
+def test_a_feeds_cache_failure_that_is_not_a_config_error_is_not_swallowed(
+    tmp_path: Path, home: Path
+) -> None:
+    """Only the expected "not configured" shape falls back silently; anything else is a real
+    bug in the caller and must not be hidden behind a quiet None."""
+    broken = lambda: (_ for _ in ()).throw(RuntimeError("boom"))  # noqa: E731
+    ctx = _ctx_with_feeds_cache(tmp_path, home, broken)
+    with pytest.raises(RuntimeError, match="boom"):
+        ctx.tools.get("grype")
