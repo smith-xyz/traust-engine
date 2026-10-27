@@ -18,6 +18,12 @@ from traust_core.v1.context.context import Services
 from traust_core.v1.errors import NotFoundError
 from traust_core.v1.models.artifacts import RunManifestArtifact
 from traust_core.v1.models.common import every_item
+from traust_core.v1.models.inventory import (
+    ProductSlug,
+    RecordedRelease,
+    ReleaseCommit,
+    VersionLabel,
+)
 from traust_core.v1.models.operations import (
     OPEN_ORDER_STATES,
     JobResult,
@@ -29,7 +35,7 @@ from traust_core.v1.models.operations import (
     RunOrder,
     WorkerId,
 )
-from traust_core.v1.models.values import HttpsRepoUrl
+from traust_core.v1.models.values import GitSha, HttpsRepoUrl
 from traust_core.v1.services.artifact_publishing import PublishSpec, PublishSpecs
 
 from traust_engine.ops.controller import ENGINE, Controller
@@ -353,8 +359,66 @@ def test_the_lane_budget_cuts_the_lowest_priority_routed_work(
     report = EngineLoop(services, clock, Pack.load(PACK)).run_once()
     assert report.admission.withheld == withheld
     if withheld:
-        (cut,) = _orders(services, OrderState.WITHHELD)
+        (cut,) = [o for o in _orders(services, OrderState.WITHHELD) if o.asset == "diff_scan"]
         assert (cut.repository_id, cut.reason) == (second, "budget-over")
+
+
+def _stale_stops(services: Services) -> list[tuple[UUID | None, datetime | None]]:
+    withheld = _orders(services, OrderState.WITHHELD)
+    return sorted(
+        ((o.repository_id, o.finished_at) for o in withheld if o.reason == "upstream-stale"),
+        key=str,
+    )
+
+
+def test_a_stale_upstream_leaves_one_stop_per_subject_per_dependency_cadence(
+    tmp_path: Path,
+) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    repos = _repositories(services, 2)
+    loop = EngineLoop(services, clock, Pack.load(PACK))
+    for _ in range(3):
+        assert loop.run_once().tick.stale == {"dependency_graph": 2}
+        clock.at += timedelta(hours=1)
+    first = _stale_stops(services)
+    assert sorted(r for r, _ in first) == sorted(repos) and {at for _, at in first} == {T0}
+    assert all(o.asset == "dependency_graph" for o in _orders(services, OrderState.WITHHELD))
+
+    clock.at = T0 + timedelta(hours=24, minutes=1)
+    assert loop.run_once().tick.stale == {"dependency_graph": 2}
+    clock.at += timedelta(hours=1)
+    loop.run_once()
+    rolled = [s for s in _stale_stops(services) if s not in first]
+    assert sorted(rolled, key=str) == sorted(
+        ((r, T0 + timedelta(hours=24, minutes=1)) for r in repos), key=str
+    )
+
+
+def test_a_stale_stop_never_holds_back_the_order_once_upstreams_are_fresh(
+    tmp_path: Path,
+) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    repos = _repositories(services, 2)
+    loop = EngineLoop(services, clock, Pack.load(PACK))
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    report = loop.run_once()
+    assert report.tick.stale == {}
+    graphs = [o for o in _orders(services, *OPEN_ORDER_STATES) if o.asset == "dependency_graph"]
+    assert sorted(o.repository_id for o in graphs) == sorted(repos)
+    assert len(_stale_stops(services)) == 2
+
+
+def test_a_shadow_pass_records_no_stale_stop(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    _repositories(services, 2)
+    shadow = EngineLoop(services, clock, Pack.load(PACK)).shadow_once()
+    assert shadow.tick.stale == {"dependency_graph": 2}
+    assert _orders(services, OrderState.WITHHELD) == []
 
 
 def test_unknown_cost_is_never_withheld(tmp_path: Path) -> None:
@@ -690,3 +754,69 @@ def test_a_router_needs_the_feed(tmp_path: Path) -> None:
     services = _context(tmp_path, clock).services()
     with pytest.raises(ValueError):
         Controller(Pack.load(PACK), services.ops, clock, LaneRouter(), state_of=lambda r: r)
+
+
+class ReleaseRouter:
+    """Routes a repository to diff-scan-quarterly for each release it was given; keeps them."""
+
+    def __init__(self) -> None:
+        self.releases: dict[UUID, list[RecordedRelease]] = {}
+
+    def route(
+        self, state: UUID, events: Sequence[RecordedRelease], refusals: object
+    ) -> tuple[Route, ...]:
+        self.releases.setdefault(state, []).extend(events)
+        lane = "diff-scan-quarterly" if events else None
+        return (Route(lane=lane, priority=1, reason="release"),)  # type: ignore[arg-type]
+
+
+def _release(services: Services, version: str, *repositories: UUID) -> RecordedRelease:
+    product = services.portfolio.find_product(ProductSlug("ocp")) or (
+        services.portfolio.register_product(ProductSlug("ocp"), "OCP")
+    )
+    commits = [
+        ReleaseCommit(
+            url=HttpsRepoUrl.parse(services.portfolio.get_repository(r).url, ["github.com"]),
+            sha=GitSha("a" * 40),
+        )
+        for r in repositories
+    ]
+    release = services.portfolio.import_release(product.id, VersionLabel(version), commits)  # type: ignore[arg-type]
+    return services.portfolio.recorded_release(release.id)  # type: ignore[arg-type]
+
+
+def test_a_recorded_release_routes_each_repository_it_ships_once(tmp_path: Path) -> None:
+    router = ReleaseRouter()
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    shipped, other, left_out = _repositories(services, 3)
+    loop = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    first = _release(services, "4.19", shipped, other)
+    clock.at += timedelta(minutes=10)
+    assert loop.run_once().tick.routed == 2
+    assert router.releases == {shipped: [first], other: [first]}
+    assert first.change is None
+    planned = _scans(services, *OPEN_ORDER_STATES)
+    assert sorted((o.repository_id, o.lane, o.rule) for o in planned) == sorted(
+        (r, "diff-scan-quarterly", "release") for r in (shipped, other)
+    )
+
+    router.releases.clear()
+    assert loop.run_once().tick.routed == 0
+    second = _release(services, "4.20", shipped)
+    assert loop.run_once().tick.routed == 1
+    assert router.releases == {shipped: [second]}
+    assert second.change is not None and second.change.remodels()
+    assert left_out not in router.releases
+
+
+def test_a_restart_does_not_replay_releases_routed_before_it(tmp_path: Path) -> None:
+    router = ReleaseRouter()
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    (repo,) = _repositories(services, 1)
+    _release(services, "4.19", repo)
+    assert EngineLoop(services, clock, Pack.load(PACK), router, lambda r: r).run_once().tick.routed
+    router.releases.clear()
+    restarted = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
+    assert restarted.run_once().tick.routed == 0 and router.releases == {}

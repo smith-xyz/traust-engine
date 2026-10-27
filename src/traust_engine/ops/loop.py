@@ -10,7 +10,7 @@ from uuid import UUID
 from traust_core.v1.context.context import Services
 from traust_core.v1.models.base import Model
 from traust_core.v1.models.common import every_item
-from traust_core.v1.models.inventory import RepositoryFilter
+from traust_core.v1.models.inventory import RecordedRelease, RepositoryFilter
 from traust_core.v1.models.operations import OrderRequest
 from traust_core.v1.providers.clock import Clock
 from traust_core.v1.services.operations import Router
@@ -39,11 +39,13 @@ class EngineLoop(Generic[S]):
         services: Services,
         clock: Clock,
         pack: Pack,
-        router: Router[S, object] | None = None,
+        router: Router[S, RecordedRelease] | None = None,
         state_of: Callable[[UUID], S] | None = None,
     ) -> None:
         self._services = services
-        self._controller = Controller(pack, services.ops, clock, router, state_of, services.feed)
+        self._controller = Controller(
+            pack, services.ops, clock, router, state_of, services.feed, services.portfolio
+        )
         self._admission = Admission(pack, services.ops, services.spend, clock)
 
     def run_once(self) -> PassReport:
@@ -55,7 +57,7 @@ class EngineLoop(Generic[S]):
     def shadow_once(self) -> ShadowReport:
         """The orders a pass would plan, with nothing reaped, planned or admitted: run beside cron
         (whose runs are recorded orders) until the cutover."""
-        tick, due = self._controller.due(self._hosts().keys())
+        tick, due, _ = self._controller.due(self._hosts().keys())
         return ShadowReport(tick=tick, due=tuple(due))
 
     def _hosts(self) -> dict[UUID, str]:
