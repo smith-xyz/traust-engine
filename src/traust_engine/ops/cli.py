@@ -170,6 +170,11 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument(
         "--feeds", type=Path, help="the pack's feeds registry: its feeds are known to core"
     )
+    common.add_argument(
+        "--models",
+        type=Path,
+        help="the model registry: a completed order's measured usage is priced as its spend",
+    )
     passes = argparse.ArgumentParser(add_help=False)
     passes.add_argument("--router", help="the pack's router, module:Class")
     passes.add_argument("--once", action="store_true", help="one pass, then exit (from cron)")
@@ -212,6 +217,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         core = Context.from_file(args.core)
         if args.feeds:
             core.register_feeds(args.feeds)
+        if args.models:
+            core.register_model_catalog(args.models)
         pack = Pack.load(args.pack, *args.pin, *([args.feeds] if args.feeds else []))
         if args.op in ("run", "shadow"):
             return _passes(args, core, pack, shadow=args.op == "shadow")
