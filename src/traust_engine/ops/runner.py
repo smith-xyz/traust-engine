@@ -127,12 +127,14 @@ class Runner:
         return ops.complete(order.id, self._worker, result)
 
     def _values(self, order: RunOrder, spec: AssetSpec) -> dict[str, str]:
-        """What the order supplies: its id, the asset's model role, and its repository's URL for
-        a per-repository asset. NEED(model: order params): typed params beyond the repository
-        have no column yet."""
+        """What the order supplies: its id, the asset's model role, the rule that routed it, and
+        its repository's URL for a per-repository asset. NEED(model: order params): typed params
+        beyond the repository have no column yet."""
         values = {"run_id": str(order.id)}
         if spec.model is not None:
             values["role"] = spec.model.role
+        if order.rule is not None:
+            values["rule"] = order.rule
         if order.repository_id is not None:
             url = self._services.portfolio.get_repository(order.repository_id).url
             values["repo_url"] = str(HttpsRepoUrl.parse(url, self._hosts))
