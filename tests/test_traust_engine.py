@@ -21,59 +21,18 @@ def _home_with_progress_tracker(tmp_path: Path, pt: Path) -> Path:
     return home
 
 
-def test_metrics_journal_follows_configured_progress_tracker(tmp_path):
-    pt = tmp_path / "estate-pt"
-    h = HarnessEngine.load(config_home=_home_with_progress_tracker(tmp_path, pt))
-
-    h.metrics.append("census", {"repos": 812})
-    row = h.metrics.append("census", {"repos": 815})
-
-    # the engine received its location from the context — the journal landed under
-    # the operator-configured progress-tracker, not a workspace-relative guess.
-    assert (pt / "metrics" / "metrics-history.jsonl").is_file()
-    assert h.metrics.rows()[-1]["metrics"]["repos"] == 815
-    assert h.metrics.previous("census")["row_sha"] == row["row_sha"]
-    ok, issues = h.metrics.verify()
-    assert ok, issues
-
-
-def test_metrics_spend_build_uses_configured_paths(tmp_path):
-    pt = tmp_path / "estate-pt"
-    ws = tmp_path / "estate-ws"
-    ws.mkdir()
-    home = _home_with_progress_tracker(tmp_path, pt)
-    (home / "locations.yaml").write_text(
-        yaml.safe_dump({"progress_tracker": str(pt), "workspace": str(ws)}),
-        encoding="utf-8",
-    )
-    h = HarnessEngine.load(config_home=home)
-    out = h.metrics.build_spend_dashboard()
-    assert out == pt / "metrics" / "dashboards" / "spend" / "spend-dashboard.md"
-    assert out.is_file()
-
-
 def test_two_engines_are_isolated_by_their_context(tmp_path):
     h1 = HarnessEngine.load(config_home=_home_with_progress_tracker(tmp_path, tmp_path / "a"))
     h2 = HarnessEngine.load(config_home=_home_with_progress_tracker(tmp_path, tmp_path / "b"))
-    h1.metrics.append("s", {"x": 1})
-    assert h1.metrics.rows() and not h2.metrics.rows()
+    assert h1.sweep._progress_tracker() == tmp_path / "a"
+    assert h2.sweep._progress_tracker() == tmp_path / "b"
 
 
 def test_namespace_ops_are_cached_per_engine(tmp_path):
     h = HarnessEngine.load(config_home=_home_with_progress_tracker(tmp_path, tmp_path / "pt"))
-    assert h.metrics is h.metrics
-    assert h.models is h.models
     assert h.adapters is h.adapters
     assert h.sweep is h.sweep
     assert h.portfolio is h.portfolio
-
-
-def test_models_registry_and_validate_from_context(tmp_path):
-    h = HarnessEngine.load(config_home=_home_with_progress_tracker(tmp_path, tmp_path / "pt"))
-    reg = h.models.registry()
-    assert reg is h.ctx.model_registry
-    assert h.models.validate() == []
-    assert h.models.resolve("fact-judge") == "claude-sonnet-5"
 
 
 def test_sweep_paths_follow_configured_locations(tmp_path):

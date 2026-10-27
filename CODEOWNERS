@@ -10,7 +10,4 @@
 # Disposition ledger and corpus resolution
 /src/traust_engine/corpus/ @traust-security/traust-admins
 
-# Metrics journal
-/src/traust_engine/metrics/history.py @traust-security/traust-admins
-
 * @traust-security/traust-admins

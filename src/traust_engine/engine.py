@@ -8,13 +8,12 @@ it needs, with no dependency on the app:
     from traust_engine import HarnessEngine
 
     h = HarnessEngine(ctx)                       # explicit context (tests, app)
-    h.metrics.append("census", {"repos": 812})
-    ok, issues = h.metrics.verify()
+    h.sweep.collect(...)
 
-Namespaces mirror the engine's submodules: `.metrics`, `.models`, `.adapters` (the rule-lane
-stage's opengrep config), `.sweep`, `.portfolio`.
+Namespaces mirror the engine's submodules: `.adapters` (the rule-lane stage's opengrep
+config), `.sweep`, `.portfolio`.
 
-PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
 deleted when traust retires or ports it.
 """
 
@@ -26,9 +25,7 @@ from pathlib import Path
 from traust_contracts import HarnessContext, load_context
 
 from traust_engine.adapters.ops import AdaptersOps
-from traust_engine.metrics.ops import MetricsOps
 from traust_engine.portfolio.ops import PortfolioOps
-from traust_engine.registry.ops import ModelsOps
 from traust_engine.sweep.ops import SweepOps
 
 
@@ -44,14 +41,6 @@ class HarnessEngine:
     @property
     def ctx(self) -> HarnessContext:
         return self._ctx
-
-    @cached_property
-    def metrics(self) -> MetricsOps:
-        return MetricsOps(self._ctx)
-
-    @cached_property
-    def models(self) -> ModelsOps:
-        return ModelsOps(self._ctx)
 
     @cached_property
     def adapters(self) -> AdaptersOps:

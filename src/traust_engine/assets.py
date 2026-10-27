@@ -9,7 +9,7 @@ Located via ``importlib`` (metadata + resources), never ``Path(__file__)``
 arithmetic or a repo-layout assumption — the latter breaks the moment the
 package is installed as a wheel (the original HARNESS_ROOT bug).
 
-PENDING(decision: sweep stages | metrics journal) — kept for traust;
+PENDING(decision: sweep stages) — kept for traust;
 deleted when traust retires or ports it.
 """
 

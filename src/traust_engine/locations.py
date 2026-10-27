@@ -11,7 +11,7 @@ context the caller resolved, so no consumer can silently read a second estate
 below the ops layer. The resolution logic lives here, once; ops pass ``self._loc``
 and never re-derive it.
 
-PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
 deleted when traust retires or ports it.
 """
 
@@ -141,8 +141,6 @@ SCAN_TESTING_REL = Path("scan-testing")
 PHASE0_REL = SCAN_TESTING_REL / "phase-0"
 SWEEPS_REL = SCAN_TESTING_REL / "sweeps"
 VALIDATION_BENCHMARK_REL = SCAN_TESTING_REL / "validation-benchmark"
-#: The metrics-history journal lives under the configured metrics root, not results.
-METRICS_HISTORY_REL = Path("metrics") / "metrics-history.jsonl"
 #: Sweep-engine and regression-rule draft staging under the metrics root.
 RULE_DRAFTS_REL = Path("metrics") / "rule-mining" / "rule-drafts"
 
@@ -197,9 +195,3 @@ def scan_testing_dir(loc: Locations | None) -> Path | None:
 def benchmark_dir(loc: Locations | None) -> Path | None:
     """``<analysis-results>/scan-testing/validation-benchmark``, or None."""
     return _under_results(VALIDATION_BENCHMARK_REL, loc)
-
-
-def metrics_history(loc: Locations | None) -> Path | None:
-    """``<metrics-root>/metrics/metrics-history.jsonl``, or None."""
-    pt = progress_tracker_dir(loc)
-    return pt / METRICS_HISTORY_REL if pt else None

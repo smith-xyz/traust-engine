@@ -35,7 +35,7 @@ USAGE
     db = storage.localize(cfg.portfolio_graph_uri())   # -> local Path
     if storage.exists(results_uri / "graph/sboms"): ...
 
-PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
 deleted when traust retires or ports it.
 """
 
