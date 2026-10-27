@@ -25,12 +25,6 @@
     "contracts": 1,
     "state-file": 4
   },
-  "src/traust_engine/metrics/history.py": {
-    "contracts": 2
-  },
-  "src/traust_engine/metrics/spend.py": {
-    "contracts": 1
-  },
   "src/traust_engine/ops/admission.py": {
     "core-internal": 2
   },
@@ -45,12 +39,6 @@
   },
   "src/traust_engine/portfolio/graph.py": {
     "database": 1
-  },
-  "src/traust_engine/registry/models.py": {
-    "contracts": 1
-  },
-  "src/traust_engine/registry/ops.py": {
-    "contracts": 1
   },
   "src/traust_engine/sweep/engine.py": {
     "contracts": 1

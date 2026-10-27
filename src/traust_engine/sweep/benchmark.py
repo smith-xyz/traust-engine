@@ -28,9 +28,7 @@ Flow per run: `plan` → deploy vuln fixtures to the disposable cluster →
 run /validate-findings against benchmark-findings.json → `score
 --variant vuln` → redeploy safe twins → re-run → `score --variant safe`.
 Results land in analysis-results/scan-testing/validation-benchmark/
-(harness-QA tree — excluded from campaign metrics) and the scorecard
-appends to the hash-chained metrics ledger (source
-validation-benchmark).
+(harness-QA tree — excluded from campaign metrics).
 """
 
 from __future__ import annotations
@@ -204,32 +202,6 @@ def cmd_score(args, *, results_dir: Path) -> int:
         )
     )
 
-    # ledger row (best effort)
-    payload = json.dumps(
-        {
-            metric: val,
-            "severity_accuracy": result["severity_accuracy"],
-            "variant": args.variant,
-            "n": result["n"],
-        }
-    )
-    # Best-effort metrics append, gated on the metrics destination being
-    # configured (locations.progress_tracker) rather than a WORKSPACE env var.
-    if locations.progress_tracker_dir(locations.configured_locations()) is not None:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "traust_engine.metrics.history",
-                "append",
-                "--source",
-                "validation-benchmark",
-                "--metrics-json",
-                "-",
-            ],
-            input=payload,
-            text=True,
-        )
     if val is not None and val < floor:
         print(
             f"BELOW FLOOR — a lane change that drops {metric} under {floor} must not ship",

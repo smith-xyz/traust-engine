@@ -15,10 +15,9 @@ tagged `PENDING(decision: …)`); deleted when traust retires or ports it:
 
 | Module | Kept for |
 |---|---|
-| `traust_engine.engine` | `HarnessEngine` facade: `.metrics`, `.models`, `.adapters`, `.sweep`, `.portfolio` |
+| `traust_engine.engine` | `HarnessEngine` facade: `.adapters`, `.sweep`, `.portfolio` |
 | `traust_engine.sweep` | sweep stages: collect, draft, sweep, emit, benchmark, rule lane, mining, calibration |
 | `traust_engine.portfolio` | portfolio graph layers |
-| `traust_engine.metrics`, `traust_engine.registry` | metrics journal and spend pricing |
 | `traust_engine.adapters` | opengrep (sweep stages) and checkov (portfolio graph) |
 | `traust_engine.corpus` | the report population the sweep stages read |
 
@@ -26,7 +25,7 @@ The opengrep rule pack ships under `data/secure-code-audit/opengrep-rules/`. Thi
 config itself — it is a pure consumer.** A caller builds the context once
 (`traust_contracts.load_context()`, done for you by
 `HarnessEngine.load(config_home=…)`) and the engine receives it *injected*: the
-ops namespaces (`h.metrics`, `h.adapters`, …) hold the frozen `HarnessContext` and
+ops namespaces (`h.sweep`, `h.adapters`, …) hold the frozen `HarnessContext` and
 derive paths from it; stateless functions take already-resolved arguments. No
 environment overrides, no cwd or workspace-shaped guessing; a required-but-absent
 file fails closed with `DeploymentConfigMissing` at the entry point. The config
