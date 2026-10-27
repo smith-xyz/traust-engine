@@ -2029,7 +2029,7 @@ dependencies = [
 [[package]]
 name = "traust-core"
 version = "0.1.0"
-source = { git = "https://github.com/traust-security/traust-core.git?rev=603aabff84336a18162074b82d49484bafda8559#603aabff84336a18162074b82d49484bafda8559" }
+source = { git = "https://github.com/traust-security/traust-core.git?rev=efd279759a73c1a9b7a43f50a91fc10c97f788df#efd279759a73c1a9b7a43f50a91fc10c97f788df" }
 dependencies = [
     { name = "jsonschema", extra = ["format-nongpl"] },
     { name = "pydantic" },
@@ -2095,7 +2095,7 @@ requires-dist = [
     { name = "referencing" },
     { name = "s3fs", marker = "extra == 's3'", specifier = ">=2024.2" },
     { name = "sigstore", marker = "extra == 'signing'", specifier = ">=4.0,<5.0" },
-    { name = "traust-core", git = "https://github.com/traust-security/traust-core.git?rev=603aabff84336a18162074b82d49484bafda8559" },
+    { name = "traust-core", git = "https://github.com/traust-security/traust-core.git?rev=efd279759a73c1a9b7a43f50a91fc10c97f788df" },
     { name = "tree-sitter", marker = "extra == 'graph'" },
     { name = "tree-sitter-go", marker = "extra == 'graph'" },
     { name = "tree-sitter-javascript", marker = "extra == 'graph'" },
