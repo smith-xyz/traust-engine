@@ -359,8 +359,66 @@ def test_the_lane_budget_cuts_the_lowest_priority_routed_work(
     report = EngineLoop(services, clock, Pack.load(PACK)).run_once()
     assert report.admission.withheld == withheld
     if withheld:
-        (cut,) = _orders(services, OrderState.WITHHELD)
+        (cut,) = [o for o in _orders(services, OrderState.WITHHELD) if o.asset == "diff_scan"]
         assert (cut.repository_id, cut.reason) == (second, "budget-over")
+
+
+def _stale_stops(services: Services) -> list[tuple[UUID | None, datetime | None]]:
+    withheld = _orders(services, OrderState.WITHHELD)
+    return sorted(
+        ((o.repository_id, o.finished_at) for o in withheld if o.reason == "upstream-stale"),
+        key=str,
+    )
+
+
+def test_a_stale_upstream_leaves_one_stop_per_subject_per_dependency_cadence(
+    tmp_path: Path,
+) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    repos = _repositories(services, 2)
+    loop = EngineLoop(services, clock, Pack.load(PACK))
+    for _ in range(3):
+        assert loop.run_once().tick.stale == {"dependency_graph": 2}
+        clock.at += timedelta(hours=1)
+    first = _stale_stops(services)
+    assert sorted(r for r, _ in first) == sorted(repos) and {at for _, at in first} == {T0}
+    assert all(o.asset == "dependency_graph" for o in _orders(services, OrderState.WITHHELD))
+
+    clock.at = T0 + timedelta(hours=24, minutes=1)
+    assert loop.run_once().tick.stale == {"dependency_graph": 2}
+    clock.at += timedelta(hours=1)
+    loop.run_once()
+    rolled = [s for s in _stale_stops(services) if s not in first]
+    assert sorted(rolled, key=str) == sorted(
+        ((r, T0 + timedelta(hours=24, minutes=1)) for r in repos), key=str
+    )
+
+
+def test_a_stale_stop_never_holds_back_the_order_once_upstreams_are_fresh(
+    tmp_path: Path,
+) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    repos = _repositories(services, 2)
+    loop = EngineLoop(services, clock, Pack.load(PACK))
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    report = loop.run_once()
+    assert report.tick.stale == {}
+    graphs = [o for o in _orders(services, *OPEN_ORDER_STATES) if o.asset == "dependency_graph"]
+    assert sorted(o.repository_id for o in graphs) == sorted(repos)
+    assert len(_stale_stops(services)) == 2
+
+
+def test_a_shadow_pass_records_no_stale_stop(tmp_path: Path) -> None:
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    _repositories(services, 2)
+    shadow = EngineLoop(services, clock, Pack.load(PACK)).shadow_once()
+    assert shadow.tick.stale == {"dependency_graph": 2}
+    assert _orders(services, OrderState.WITHHELD) == []
 
 
 def test_unknown_cost_is_never_withheld(tmp_path: Path) -> None:

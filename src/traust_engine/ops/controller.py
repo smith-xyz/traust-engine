@@ -19,6 +19,7 @@ from traust_core.v1.models.operations import (
     OPEN_ORDER_STATES,
     AssetName,
     LaneName,
+    OrderReason,
     OrderRequest,
     OrderState,
     Refusal,
@@ -78,21 +79,27 @@ class Controller(Generic[S]):
         self._cursor: Cursor | None = None
 
     def tick(self, repositories: Collection[UUID]) -> TickReport:
-        report, requests = self.due(repositories)
+        report, requests, stops = self.due(repositories)
         for request in requests:
             self._ops.plan(request, ENGINE, self._pack.config())
+        for request in stops:
+            order = self._ops.plan(request, ENGINE, self._pack.config())
+            assert order.id is not None
+            self._ops.withhold(order.id, OrderReason.UPSTREAM_STALE)
         log.info("tick planned %d orders, routed %d repositories", report.planned, report.routed)
         return report
 
-    def due(self, repositories: Collection[UUID]) -> tuple[TickReport, list[OrderRequest]]:
-        """What a tick would plan (routed orders, then every due asset), writing nothing: the
-        shadow run's view of the loop."""
+    def due(
+        self, repositories: Collection[UUID]
+    ) -> tuple[TickReport, list[OrderRequest], list[OrderRequest]]:
+        """What a tick would plan (routed orders, then every due asset), and the stale-upstream
+        stops it would record on the feed, writing nothing: the shadow run's view of the loop."""
         now = self._clock.now()
         unrunnable = self._pack.unrunnable()
         if unrunnable:
             log.warning("not planned, no run or model.role: %s", ", ".join(unrunnable))
         requests, routed, unrouted, refused_again = self._route(now, unrunnable)
-        planned, stale = 0, {}
+        planned, stale, stops = 0, {}, []
         for name in self._pack.topo_order():
             spec = self._pack.assets[name]
             since = spec.trigger.since(now)
@@ -103,15 +110,18 @@ class Controller(Generic[S]):
                 name, ATTEMPTED, since
             )
             fresh = {dep: self._fresh(dep, now) for dep in spec.deps}
+            stopped: dict[AssetName, set[UUID | None]] = {}
             for subject in subjects:
                 if subject in busy:
                     continue
-                if any(self._dep_subject(dep, subject) not in ok for dep, ok in fresh.items()):
+                request = OrderRequest(asset=name, priority=spec.priority, repository_id=subject)
+                behind = [d for d, ok in fresh.items() if self._dep_subject(d, subject) not in ok]
+                if behind:
                     stale[name] = stale.get(name, 0) + 1
+                    if not any(subject in self._stopped(name, d, now, stopped) for d in behind):
+                        stops.append(request)
                     continue
-                requests.append(
-                    OrderRequest(asset=name, priority=spec.priority, repository_id=subject)
-                )
+                requests.append(request)
                 planned += 1
         for name, count in stale.items():
             log.warning("%s: %d subjects wait on stale upstreams; not planned", name, count)
@@ -125,7 +135,23 @@ class Controller(Generic[S]):
             overdue=overdue,
             unrunnable=unrunnable,
         )
-        return report, requests
+        return report, requests, stops
+
+    def _stopped(
+        self,
+        name: AssetName,
+        dep: AssetName,
+        now: datetime,
+        cache: dict[AssetName, set[UUID | None]],
+    ) -> set[UUID | None]:
+        """Subjects of `name` already stopped on stale `dep` within `dep`'s cadence, so a stale
+        upstream leaves one stop per window, not one per tick."""
+        if dep not in cache:
+            since = self._pack.assets[dep].trigger.since(now)
+            cache[dep] = self._ops.subjects(
+                name, (OrderState.WITHHELD,), since, OrderReason.UPSTREAM_STALE
+            )
+        return cache[dep]
 
     def _overdue(
         self, repositories: Collection[UUID], now: datetime, unrunnable: Collection[AssetName]

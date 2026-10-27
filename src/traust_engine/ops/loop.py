@@ -57,7 +57,7 @@ class EngineLoop(Generic[S]):
     def shadow_once(self) -> ShadowReport:
         """The orders a pass would plan, with nothing reaped, planned or admitted: run beside cron
         (whose runs are recorded orders) until the cutover."""
-        tick, due = self._controller.due(self._hosts().keys())
+        tick, due, _ = self._controller.due(self._hosts().keys())
         return ShadowReport(tick=tick, due=tuple(due))
 
     def _hosts(self) -> dict[UUID, str]:
