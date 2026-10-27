@@ -631,7 +631,22 @@ def render_threat_model(document: dict) -> str:
     mitigations = document.get("mitigations") or []
     if mitigations:
         lines += ["## 8. Recommended mitigations", ""]
-        lines += _tm_table(("mitigation", "threat_ids", "closes_class", "effort"), mitigations)
+        columns = ("mitigation", "threat_ids", "closes_class", "effort")
+        if any("blocked_external" in item for item in mitigations):
+            columns += ("blocked_external",)
+        rows = [
+            {
+                **item,
+                "effort": "-" if item["effort"] is None else item["effort"],
+                "blocked_external": (
+                    "-"
+                    if item.get("blocked_external") is None
+                    else str(item["blocked_external"]).lower()
+                ),
+            }
+            for item in mitigations
+        ]
+        lines += _tm_table(columns, rows)
         lines += [""]
 
     scenarios = document.get("attack_scenarios") or []

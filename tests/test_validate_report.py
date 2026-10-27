@@ -1171,6 +1171,45 @@ class TestThreatModelArtifact(unittest.TestCase):
         ]
         self.assertIn("## 10. Tenant boundaries", render.render_threat_model(populated))
 
+    def test_rendered_mitigation_sizes_and_blocking_pass_lint_without_losing_unknowns(self):
+        document = {
+            **self.DOC,
+            "mitigations": [
+                {
+                    "mitigation": "Small fix",
+                    "threat_ids": ["T1"],
+                    "closes_class": "yes",
+                    "effort": "s",
+                    "blocked_external": False,
+                },
+                {
+                    "mitigation": "Unknown fix",
+                    "threat_ids": ["T1"],
+                    "closes_class": "partial",
+                    "effort": None,
+                    "blocked_external": True,
+                },
+                {
+                    "mitigation": "Larger fix",
+                    "threat_ids": ["T1"],
+                    "closes_class": "no",
+                    "effort": "xl",
+                },
+            ],
+        }
+        markdown = render.render_threat_model(document)
+        sections = dict(lint.parse_sections(markdown))
+        columns, rows = lint.parse_table(sections["8. Recommended mitigations"])
+        self.assertEqual(
+            columns, ["mitigation", "threat_ids", "closes_class", "effort", "blocked_external"]
+        )
+        self.assertEqual([row[3:] for row in rows], [["s", "false"], ["-", "true"], ["xl", "-"]])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "repo-threat-model.md"
+            path.write_text(markdown, encoding="utf-8")
+            errors, _ = lint.lint_file(path)
+            self.assertEqual(errors, [])
+
 
 class TestArtifactKindDetection(unittest.TestCase):
     """Artifacts that are not audit reports get their own schema by filename

@@ -198,6 +198,21 @@ class TestEnums(unittest.TestCase):
         )
         self.assertEqual([e for e in errors if "section 8" in e], [])
 
+    def test_external_blocking_cannot_be_used_as_an_effort_size(self):
+        errors, _ = lint_text(VALID.replace("| yes | M |", "| yes | blocked-external |"))
+        self.assertTrue(any("section 8" in error and "effort" in error for error in errors))
+
+    def test_independent_blocking_is_not_arbitrary_prose(self):
+        text = VALID.replace(
+            "| mitigation | threat_ids | closes_class | effort |",
+            "| mitigation | threat_ids | closes_class | effort | blocked_external |",
+        ).replace(
+            "| sandbox the decoder process | T1 | yes | M |",
+            "| sandbox the decoder process | T1 | yes | s | waiting for a vendor |",
+        )
+        errors, _ = lint_text(text)
+        self.assertTrue(any("blocked_external" in error for error in errors))
+
     def test_bad_impact(self):
         errors, _ = lint_text(VALID.replace("| critical | likely |", "| severe | likely |"))
         self.assertTrue(any("impact 'severe'" in e for e in errors))

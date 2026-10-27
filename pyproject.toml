@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "traust-engine"
-version = "0.39.0"
+version = "0.39.1"
 license = "Apache-2.0"
 description = "Processing core for the AI security harness: scanners, data management, analysis, format handlers"
 requires-python = ">=3.11"
@@ -39,7 +39,7 @@ gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
 dev = ["fsspec>=2024.2", "pytest>=9.1.1", "pytest-xdist>=3", "ruff>=0.6", "vulture>=2.16"]
 
 [tool.uv.sources]
-traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "7c288fdcf196d6a6da4f357b39e1723ce6cdc520" }
+traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "ef91ec9388dfb8975dc5f7925ece12e66d89b243" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/traust_engine"]
