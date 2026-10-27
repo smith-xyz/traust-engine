@@ -2,6 +2,13 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.39.2]
+
+- Impact-analysis artifacts no longer fail validation with
+  "metadata.repository is absent". The artifact is portfolio-wide: it names
+  each repo in `repos[].repo` and has no findings to fingerprint. The same
+  fix is on `main` (0.44.2).
+
 ## [0.39.1]
 
 - Render and lint canonical threat-model mitigation effort using Core's
