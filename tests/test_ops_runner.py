@@ -56,13 +56,15 @@ def context(tmp_path: Path) -> Context:
     return Context(Config(home=tmp_path / "home"))
 
 
-def _submit(context: Context, asset: str, priority: int = 1, repo: bool = False) -> RunOrder:
+def _submit(
+    context: Context, asset: str, priority: int = 1, repo: bool = False, rule: str | None = None
+) -> RunOrder:
     services = context.services()
     repository_id = None
     if repo:
         url = HttpsRepoUrl.parse("https://github.com/example/app", HOSTS)
         repository_id = services.portfolio.register_repository(url, public=True).id
-    request = OrderRequest(asset=asset, priority=priority, repository_id=repository_id)
+    request = OrderRequest(asset=asset, priority=priority, repository_id=repository_id, rule=rule)
     return services.ops.submit(request, OPERATOR)
 
 
@@ -110,6 +112,48 @@ def test_a_repository_asset_gets_its_url(context: Context) -> None:
     commands = Commands()
     _runner(context, commands).claim_once()
     assert commands.seen[0][-2:] == ["--repo", "https://github.com/example/app"]
+
+
+def _with_rule_token(tmp_path: Path) -> Path:
+    raw = yaml.safe_load(PACK.read_text())
+    raw["assets"]["diff_scan"]["run"] = ["scan", "{repo_url}", "--rule", "{rule}"]
+    path = tmp_path / "pack.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    return path
+
+
+def test_a_routed_order_gets_the_rule_that_routed_it(context: Context, tmp_path: Path) -> None:
+    _submit(context, "diff_scan", repo=True, rule="rule-3+threat-model-pr")
+    commands = Commands()
+    runner = Runner(
+        context.services(),
+        Pack.load(_with_rule_token(tmp_path)),
+        WORKER,
+        timedelta(minutes=5),
+        HOSTS,
+        commands,
+    )
+    done = runner.claim_once()
+    assert done is not None and done.state == OrderState.SUCCEEDED
+    assert commands.seen == [
+        ["scan", "https://github.com/example/app", "--rule", "rule-3+threat-model-pr"]
+    ]
+
+
+def test_an_order_with_no_rule_cannot_fill_a_rule_token(context: Context, tmp_path: Path) -> None:
+    _submit(context, "diff_scan", repo=True)
+    commands = Commands()
+    runner = Runner(
+        context.services(),
+        Pack.load(_with_rule_token(tmp_path)),
+        WORKER,
+        timedelta(minutes=5),
+        HOSTS,
+        commands,
+    )
+    done = runner.claim_once()
+    assert done is not None and done.state == OrderState.FAILED
+    assert done.reason == "bad_request" and commands.seen == []
 
 
 def test_a_skill_session_order_is_left_for_its_launcher(context: Context) -> None:
