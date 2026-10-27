@@ -6,7 +6,6 @@ import pytest
 from traust_core.v1.errors import DocumentError
 from traust_core.v1.models.artifacts import AdapterResultArtifact
 
-from traust_engine.adapters import gitleaks, grype
 from traust_engine.adapters._contract_bridge import build_adapter_result
 
 
@@ -87,56 +86,3 @@ def test_invalid_optional_evidence_is_refused_at_artifact_admission(field, value
     )
     with pytest.raises(DocumentError):
         AdapterResultArtifact.from_document(result.to_dict())
-
-
-def test_native_secret_scanner_identity_is_not_a_domain_fingerprint(tmp_path):
-    native = {
-        "RuleID": "fixture-secret-rule",
-        "Description": "Synthetic scanner observation retaining its source context without a real credential.",
-        "File": "fixture.env",
-        "StartLine": 3,
-        "EndLine": 3,
-        "Fingerprint": "fixture.env:fixture-secret-rule:3",
-    }
-    candidates = gitleaks.parse_report([native], tmp_path, "dir")
-    assert candidates[0]["fingerprint"] == native["Fingerprint"]
-    result = build_adapter_result(
-        "synthetic-repository", "gitleaks", gitleaks._candidates_to_findings(candidates)
-    )
-    assert result.metadata.tool == "gitleaks"
-    assert result.findings[0].locations[0].path == "fixture.env"
-    assert result.findings[0].fingerprint is None
-    assert result.findings[0].origin is None
-
-
-def test_grype_package_locations_survive_conversion():
-    raw = {
-        "matches": [
-            {
-                "vulnerability": {"id": "CVE-2026-0001", "severity": "High"},
-                "artifact": {
-                    "name": "example-package",
-                    "type": "rpm",
-                    "version": "1.0",
-                    "locations": [{"path": "usr/lib/example.so"}],
-                },
-            }
-        ]
-    }
-    result = build_adapter_result("synthetic-repository", "grype", grype._parse_matches(raw))
-    assert result.findings[0].locations[0].path == "usr/lib/example.so"
-    assert result.metadata.tool == "grype"
-
-
-@pytest.mark.parametrize("severity", ["Unknown", "urgent"])
-def test_native_unknown_scanner_severity_cannot_be_relabelled_as_low(severity):
-    raw = {
-        "matches": [
-            {
-                "vulnerability": {"id": "CVE-2026-0001", "severity": severity},
-                "artifact": {"name": "fixture", "type": "rpm", "version": "1"},
-            }
-        ]
-    }
-    with pytest.raises(ValueError):
-        grype._parse_matches(raw)

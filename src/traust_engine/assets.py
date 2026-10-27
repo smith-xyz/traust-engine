@@ -1,15 +1,16 @@
-"""Engine-owned assets: the engine's own version and its bundled scanner data.
+"""Engine-owned assets: the engine's own version and its bundled opengrep rule pack.
 
 NOT configuration and NOT injected: these are intrinsic to the engine package —
-its version (from package metadata), the opengrep rule pack + gitleaks config,
-and the compliance reference data (NIST 800-53 spine and profiles, framework
-catalogs, the control-to-check mapping) that ship *inside* the wheel,
-versioned with the code. An operator never
-configures them; they do not vary per estate.
+its version (from package metadata) and the opengrep rule pack that ships
+*inside* the wheel, versioned with the code. An operator never configures them;
+they do not vary per estate.
 
 Located via ``importlib`` (metadata + resources), never ``Path(__file__)``
 arithmetic or a repo-layout assumption — the latter breaks the moment the
 package is installed as a wheel (the original HARNESS_ROOT bug).
+
+PENDING(decision: sweep stages | metrics journal) — kept for traust;
+deleted when traust retires or ports it.
 """
 
 from __future__ import annotations
@@ -36,21 +37,3 @@ def harness_version() -> str:
 def default_rule_pack_dir() -> Path:
     """Bundled opengrep rule pack directory (ships inside the package)."""
     return _package_root() / "data" / "secure-code-audit" / "opengrep-rules"
-
-
-def default_gitleaks_config() -> Path:
-    """Bundled gitleaks config file (ships inside the package)."""
-    return (
-        _package_root() / "data" / "secure-code-audit" / "gitleaks-rules" / "gitleaks-default.toml"
-    )
-
-
-def compliance_data_dir() -> Path:
-    """Bundled compliance reference data (ships inside the package).
-
-    Public framework data with no estate content: the NIST 800-53 rev5 spine,
-    the 800-53B profiles, the PCI DSS / SOC 2 / GDPR catalogs, their
-    provenance, and the harness's control-to-check mapping
-    (``compliance-mapping.yaml``).
-    """
-    return _package_root() / "data" / "compliance"

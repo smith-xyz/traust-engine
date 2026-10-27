@@ -6,12 +6,10 @@ build-backend = "hatchling.build"
 name = "traust-engine"
 version = "0.39.3"
 license = "Apache-2.0"
-description = "Processing core for the AI security harness: scanners, data management, analysis, format handlers"
+description = "Continuous-ops service for the AI security harness, on traust-core"
 requires-python = ">=3.11"
 dependencies = [
     "traust-core",
-    "jsonschema>=4.0",
-    "referencing",
     "pyyaml",
 ]
 
@@ -50,9 +48,8 @@ exclude = ["/.ci-venv", "/.venv"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: tests requiring external binaries (gitleaks, opengrep) on PATH",
+    "integration: tests requiring external binaries (opengrep) on PATH",
     "requires_git: test creates git repos in tmp dirs (skipped when git init is blocked)",
-    "unbound_safe_exec: skip autouse profile bind; assert fallback or explicit profile_map",
 ]
 
 [tool.ruff]
@@ -66,6 +63,4 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101", "E741", "E402", "E501", "RUF012"]
-"src/traust_engine/reporting/lint.py" = ["E501"]
 "src/traust_engine/metrics/history.py" = ["E501"]
-"src/traust_engine/reporting/validate.py" = ["E402"]

@@ -11,8 +11,11 @@ it needs, with no dependency on the app:
     h.metrics.append("census", {"repos": 812})
     ok, issues = h.metrics.verify()
 
-Namespaces mirror the engine's submodules; `.metrics` is the first migrated.
-Others (`.models`, `.compliance`, `.sweep`, …) follow the same shape.
+Namespaces mirror the engine's submodules: `.metrics`, `.models`, `.adapters` (the rule-lane
+stage's opengrep config), `.sweep`, `.portfolio`.
+
+PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+deleted when traust retires or ports it.
 """
 
 from __future__ import annotations
@@ -23,13 +26,10 @@ from pathlib import Path
 from traust_contracts import HarnessContext, load_context
 
 from traust_engine.adapters.ops import AdaptersOps
-from traust_engine.compliance.ops import ComplianceOps
 from traust_engine.metrics.ops import MetricsOps
 from traust_engine.portfolio.ops import PortfolioOps
 from traust_engine.registry.ops import ModelsOps
-from traust_engine.reporting.ops import ReportingOps
 from traust_engine.sweep.ops import SweepOps
-from traust_engine.toolchain.ops import ToolchainOps
 
 
 class HarnessEngine:
@@ -54,10 +54,6 @@ class HarnessEngine:
         return ModelsOps(self._ctx)
 
     @cached_property
-    def compliance(self) -> ComplianceOps:
-        return ComplianceOps(self._ctx)
-
-    @cached_property
     def adapters(self) -> AdaptersOps:
         return AdaptersOps(self._ctx)
 
@@ -66,13 +62,5 @@ class HarnessEngine:
         return SweepOps(self._ctx)
 
     @cached_property
-    def reporting(self) -> ReportingOps:
-        return ReportingOps(self._ctx)
-
-    @cached_property
     def portfolio(self) -> PortfolioOps:
         return PortfolioOps(self._ctx)
-
-    @cached_property
-    def toolchain(self) -> ToolchainOps:
-        return ToolchainOps(self._ctx)

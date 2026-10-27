@@ -49,28 +49,6 @@ os.environ.setdefault(
     "LAAS_TOKEN", f"{_seg({'typ': 'JWT', 'alg': 'none'})}.{_seg({'sub': 'test'})}."
 )
 
-from traust_contracts import load_context
-
-from traust_engine._util import safe_exec as _safe_exec_module
-
-# Default suite posture: operator profiles bound so adapter/unit tests exercise
-# real allowlists. Opt out with @pytest.mark.unbound_safe_exec — see
-# tests/test_safe_exec_wiring.py for why that matters.
-_safe_exec_module.bind_profiles(load_context().safe_exec)
-
-
-@pytest.fixture(autouse=True)
-def _bind_safe_exec_profiles(request):
-    """Re-bind after tests that mutate the profile cache."""
-    if request.node.get_closest_marker("unbound_safe_exec"):
-        _safe_exec_module.reset_profiles()
-        yield
-        _safe_exec_module.reset_profiles()
-        return
-    _safe_exec_module.bind_profiles(load_context().safe_exec)
-    yield
-    _safe_exec_module.reset_profiles()
-
 
 def _can_git_init():
     probe = None

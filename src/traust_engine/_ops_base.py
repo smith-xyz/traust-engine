@@ -3,6 +3,9 @@
 Holds the injected context and the fail-loud location resolvers every namespace
 needs. The resolution logic itself lives in :mod:`traust_engine.locations`; this
 just binds it to ``self._ctx.locations`` so no namespace re-derives it.
+
+PENDING(decision: sweep stages | portfolio graph layers | metrics journal) — kept for traust;
+deleted when traust retires or ports it.
 """
 
 from __future__ import annotations
@@ -17,15 +20,6 @@ from traust_engine import locations
 class ContextOps:
     def __init__(self, ctx: HarnessContext) -> None:
         self._ctx = ctx
-        self._safe_exec_profile_map: dict | None = None
-
-    def safe_exec_profile_map(self) -> dict:
-        """Resolved safe_exec profiles for this context (one per cached *Ops instance)."""
-        if self._safe_exec_profile_map is None:
-            from traust_engine._util import safe_exec
-
-            self._safe_exec_profile_map = safe_exec.profiles_from_section(self._ctx.safe_exec)
-        return self._safe_exec_profile_map
 
     def _optional_config_path(self, filename: str, loaded: object | None) -> Path | None:
         """Path under config_home when an optional section was loaded at entry."""

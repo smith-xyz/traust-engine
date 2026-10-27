@@ -65,7 +65,7 @@ Direct downstream: `traust`.
 
 ```bash
 make test              # unit tests (no external binaries needed)
-uv run pytest -q       # full suite (integration needs gitleaks/opengrep)
+uv run pytest -q       # full suite (integration needs opengrep)
 ```
 
 ## Architecture
