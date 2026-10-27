@@ -10,7 +10,8 @@ import json
 import subprocess
 import sys
 import time
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -20,13 +21,19 @@ from traust_core.v1.context import Config, Context
 from traust_core.v1.models.identity import Principal
 from traust_core.v1.models.operations import (
     JobResult,
+    LaneName,
+    ModelName,
+    ModelUsage,
     OrderRequest,
     OrderState,
+    ProviderName,
     RunOrder,
+    SkillName,
     WorkerId,
 )
 from traust_core.v1.models.values import HttpsRepoUrl
 from traust_core.v1.models.vocabulary import ActorKind
+from traust_core.v1.repositories.contract import SqlTraustUnitOfWork
 
 from traust_engine.ops import cli
 from traust_engine.ops.pack import Pack
@@ -309,3 +316,42 @@ def test_a_feed_degraded_by_name_completes_once_the_pack_feeds_are_known(
     assert unknown == 2  # without the registry, core refuses the feed name as a degraded key
     rc, out = claim("--feeds", str(FEEDS))
     assert (rc, json.loads(out)["state"]) == (4, "degraded")
+
+
+MODELS = Path(__file__).parent / "fixtures" / "config" / "model-registry.yaml"
+SESSION = ModelUsage(
+    provider=ProviderName("anthropic"),
+    model=ModelName("claude-opus-5"),
+    occurred_at=datetime(2026, 10, 27, tzinfo=UTC),
+    tokens_in=10**6,
+    tokens_out=0,
+    skill=SkillName("vuln-scan"),
+)
+
+
+@pytest.mark.parametrize(
+    ("models", "spend"),
+    [(True, [("full-audit", "vuln-scan", Decimal(5))]), (False, [])],
+    ids=["priced", "no registry: completed, the gap in its run manifest"],
+)
+def test_a_session_that_answers_its_usage_settles_it_as_the_orders_spend(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    models: bool,
+    spend: list[tuple[str, str, Decimal]],
+) -> None:
+    core = tmp_path / "core.yaml"
+    core.write_text(yaml.safe_dump({"home": str(tmp_path / "store")}))
+    request = OrderRequest(asset="feeds_cache", priority=1, lane=LaneName("full-audit"))
+    queued = Context.from_file(core).services().ops.submit(request, OPERATOR)
+    answer = JobResult.succeeded().model_copy(update={"usage": (SESSION,)}).model_dump_json()
+    monkeypatch.setattr("traust_engine.ops.runner._run", Commands(f"session text\n{answer}"))
+    argv = ["claim", "--core", str(core), "--pack", str(PACK)]
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert cli.main([*argv, *(["--models", str(MODELS)] if models else [])]) == 0
+    done = Context.from_file(core).services().ops.get(queued.id)
+    assert done.state == OrderState.SUCCEEDED
+    assert (done.artifact_id is None) is models  # `spend-unpriced` lands in the run manifest
+    with Context.from_file(core).unit_of_work(SqlTraustUnitOfWork) as uow:
+        events = uow.spend_events.list_for_order(queued.id)
+    assert [(e.lane, e.skill, e.cost_usd) for e in events] == spend
