@@ -50,6 +50,20 @@ UNREGISTERED: Mapping[str, str] = {
     "source, image and cluster modes",
 }
 
+# What `register_tools` registers, so a lazy registration knows the names before the config.
+TOOL_NAMES = (
+    "checkov",
+    "gitleaks",
+    "gitleaks-history",
+    "govulncheck",
+    "grype",
+    "joern",
+    "opengrep",
+    "osv",
+    "osv_sbom",
+    "yara",
+)
+
 Res = TypeVar("Res")
 
 
