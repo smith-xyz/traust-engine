@@ -2,6 +2,14 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.39.3]
+
+- Preserve supplied finding remediation effort and independent external
+  blocking in authored report Markdown.
+- Keep explicit unknown roadmap effort visible even when every size is null,
+  and render reported blocking without inventing false for omitted data.
+  Retain authored priority/order, historical labels and existing escaping.
+
 ## [0.39.2]
 
 - Impact-analysis artifacts no longer fail validation with

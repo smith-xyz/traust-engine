@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import jsonschema
+from traust_contracts.models import Report
 from traust_contracts.paths import schema_dir as _schema_dir
 
 SCHEMA_DIR = _schema_dir()
@@ -584,6 +585,198 @@ class TestRenderer(unittest.TestCase):
         md = render_report(_valid_report())
         self.assertIn("**Date:** 2026-05-21", md)
         self.assertIn("**Scope:**", md)
+
+    def test_render_finding_effort_and_blocking_are_independent(self):
+        for effort, blocked, displayed in (("s", False, "false"), (None, True, "true")):
+            with self.subTest(effort=effort, blocked=blocked):
+                report = _valid_report()
+                report["findings"][0].update(remediation_effort=effort, blocked_external=blocked)
+                md = render_report(report)
+                size = "-" if effort is None else effort
+                self.assertIn(f"| **Remediation Effort** | {size} |", md)
+                self.assertIn(f"| **Blocked Externally** | {displayed} |", md)
+
+    def test_render_finding_omitted_metadata_stays_absent(self):
+        finding = _valid_report()["findings"][0]
+        md = render.render_findings([finding])
+        self.assertNotIn("Remediation Effort", md)
+        self.assertNotIn("Blocked Externally", md)
+
+        finding["blocked_external"] = False
+        md = render.render_findings([finding])
+        self.assertNotIn("Remediation Effort", md)
+        self.assertIn("| **Blocked Externally** | false |", md)
+
+        finding.pop("blocked_external")
+        finding["remediation_effort"] = None
+        md = render.render_findings([finding])
+        self.assertIn("| **Remediation Effort** | - |", md)
+        self.assertNotIn("Blocked Externally", md)
+
+    def test_render_finding_historical_effort_is_not_relabelled(self):
+        finding = _valid_report()["findings"][0]
+        for effort in ("significant", "blocked-external"):
+            with self.subTest(effort=effort):
+                finding["remediation_effort"] = effort
+                md = render.render_findings([finding])
+                self.assertIn(f"| **Remediation Effort** | {effort} |", md)
+                self.assertNotIn("Blocked Externally", md)
+
+        finding["remediation_effort"] = "vendor |\n\u202e pending"
+        md = render.render_findings([finding])
+        self.assertIn("| **Remediation Effort** | vendor \\| pending |", md)
+
+    def test_render_roadmap_canonical_sizes_and_priorities_keep_authored_order(self):
+        roadmap = [
+            {"priority": "p4", "action": "Plan migration", "addresses": ["F5"], "effort": "xl"},
+            {"priority": "p1", "action": "Patch parser", "addresses": ["F2"], "effort": "s"},
+            {"priority": "p3", "action": "Replace library", "addresses": ["F4"], "effort": "l"},
+            {"priority": "p0", "action": "Change default", "addresses": ["F1"], "effort": "xs"},
+            {"priority": "p2", "action": "Add validation", "addresses": ["F3"], "effort": "m"},
+        ]
+        self.assertEqual(
+            render.render_remediation_roadmap(roadmap),
+            "## 5. Remediation Roadmap\n\n"
+            "| Priority | Action | Addresses | Effort |\n"
+            "| --- | --- | --- | --- |\n"
+            "| **p4** | Plan migration | F5 | xl |\n"
+            "| **p1** | Patch parser | F2 | s |\n"
+            "| **p3** | Replace library | F4 | l |\n"
+            "| **p0** | Change default | F1 | xs |\n"
+            "| **p2** | Add validation | F3 | m |",
+        )
+
+    def test_render_roadmap_null_effort_and_mixed_blocking_are_not_omissions(self):
+        roadmap = [
+            {
+                "priority": "p2",
+                "action": "Await vendor fix",
+                "addresses": ["F1"],
+                "effort": None,
+                "blocked_external": True,
+            },
+            {
+                "priority": "p0",
+                "action": "Configure limit",
+                "addresses": ["F2"],
+                "blocked_external": False,
+            },
+            {"priority": "p1", "action": "Investigate fix", "addresses": ["F3"]},
+        ]
+        self.assertEqual(
+            render.render_remediation_roadmap(roadmap),
+            "## 5. Remediation Roadmap\n\n"
+            "| Priority | Action | Addresses | Effort | Blocked Externally |\n"
+            "| --- | --- | --- | --- | --- |\n"
+            "| **p2** | Await vendor fix | F1 | - | true |\n"
+            "| **p0** | Configure limit | F2 |  | false |\n"
+            "| **p1** | Investigate fix | F3 |  |  |",
+        )
+
+    def test_render_roadmap_blocking_does_not_require_effort(self):
+        roadmap = [
+            {
+                "priority": "p1",
+                "action": "Await vendor fix",
+                "addresses": ["F1"],
+                "blocked_external": True,
+            },
+            {
+                "priority": "p0",
+                "action": "Configure limit",
+                "addresses": ["F2"],
+                "blocked_external": False,
+            },
+            {"priority": "p2", "action": "Investigate fix", "addresses": ["F3"]},
+        ]
+        self.assertEqual(
+            render.render_remediation_roadmap(roadmap),
+            "## 5. Remediation Roadmap\n\n"
+            "| Priority | Action | Addresses | Blocked Externally |\n"
+            "| --- | --- | --- | --- |\n"
+            "| **p1** | Await vendor fix | F1 | true |\n"
+            "| **p0** | Configure limit | F2 | false |\n"
+            "| **p2** | Investigate fix | F3 |  |",
+        )
+
+    def test_render_typed_report_preserves_wholly_unknown_effort(self):
+        report = _valid_report()
+        report["findings"][0]["remediation_effort"] = None
+        report["remediation_roadmap"][0]["effort"] = None
+        md = render.render_from_report(Report.from_dict(report))
+        self.assertIn("| **Remediation Effort** | - |", md)
+        self.assertIn("| Priority | Action | Addresses | Effort |", md)
+        self.assertIn(
+            "| **P0** | Implement URL allow-list validation for webhook callbacks | TEST-001 | - |",
+            md,
+        )
+        self.assertIn(
+            "| **P1** | Add io.LimitReader to admission webhook body read | TEST-002 |  |", md
+        )
+        self.assertNotIn("Blocked Externally", md)
+
+    def test_render_roadmap_without_optional_fields_keeps_old_output(self):
+        self.assertEqual(
+            render.render_remediation_roadmap(_valid_report()["remediation_roadmap"]),
+            "## 5. Remediation Roadmap\n\n"
+            "| Priority | Action | Addresses |\n"
+            "| --- | --- | --- |\n"
+            "| **P0** | Implement URL allow-list validation for webhook callbacks | TEST-001 |\n"
+            "| **P1** | Add io.LimitReader to admission webhook body read | TEST-002 |",
+        )
+
+    def test_render_roadmap_historical_labels_and_escaping_stay_raw(self):
+        roadmap = [
+            {
+                "priority": "P2",
+                "action": "Replace |\n\u202e library",
+                "addresses": ["F1|extra", "F2\n\u202e"],
+                "effort": "significant",
+            },
+            {
+                "priority": "P0",
+                "action": "Await vendor fix",
+                "addresses": ["F3"],
+                "effort": "blocked-external",
+            },
+            {
+                "priority": "later |\n\u202e maybe",
+                "action": "Reconfigure service",
+                "addresses": ["F4"],
+                "effort": "2 |\n\u202e weeks",
+            },
+        ]
+        self.assertEqual(
+            render.render_remediation_roadmap(roadmap),
+            "## 5. Remediation Roadmap\n\n"
+            "| Priority | Action | Addresses | Effort |\n"
+            "| --- | --- | --- | --- |\n"
+            "| **P2** | Replace \\| library | F1\\|extra, F2 | significant |\n"
+            "| **P0** | Await vendor fix | F3 | blocked-external |\n"
+            "| **later \\| maybe** | Reconfigure service | F4 | 2 \\| weeks |",
+        )
+
+    def test_render_supplied_malformed_values_are_not_coerced_to_sizes_or_booleans(self):
+        for value, displayed in ((0, "0"), (1, "1"), ("TRUE", "TRUE"), ("FALSE", "FALSE")):
+            with self.subTest(value=value):
+                report = _valid_report()
+                report["findings"][0].update(remediation_effort=value, blocked_external=value)
+                report["remediation_roadmap"] = [
+                    {
+                        "priority": "unranked",
+                        "action": "Investigate fix",
+                        "addresses": ["TEST-001"],
+                        "effort": value,
+                        "blocked_external": value,
+                    }
+                ]
+                md = render_report(report)
+                self.assertIn(f"| **Remediation Effort** | {displayed} |", md)
+                self.assertIn(f"| **Blocked Externally** | {displayed} |", md)
+                self.assertIn(
+                    f"| **unranked** | Investigate fix | TEST-001 | {displayed} | {displayed} |",
+                    md,
+                )
 
 
 # ---------------------------------------------------------------------------
