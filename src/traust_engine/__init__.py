@@ -3,12 +3,10 @@
 Submodules:
     ops         — continuous ops: pack spec, controller (tick), admission, reaper
 
-Kept for traust until its PENDING decisions (sweep stages, portfolio graph
-layers) retire or port them:
-    engine      — the ``HarnessEngine`` facade (adapters, sweep, portfolio)
+Kept for traust until its PENDING decision (sweep stages) retires or ports them:
+    engine      — the ``HarnessEngine`` facade (adapters, sweep)
     sweep       — class-generalization scan engine
-    portfolio   — source-code dependency graph analysis
-    adapters    — opengrep (sweep stages) and checkov (portfolio graph)
+    adapters    — opengrep (sweep stages)
     corpus      — population resolver the sweep stages read
 """
 

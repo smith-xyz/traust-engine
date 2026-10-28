@@ -5,9 +5,6 @@
   "src/traust_engine/adapters/_contract_bridge.py": {
     "contracts": 2
   },
-  "src/traust_engine/adapters/checkov.py": {
-    "contracts": 1
-  },
   "src/traust_engine/adapters/opengrep.py": {
     "contracts": 2
   },
@@ -23,7 +20,7 @@
   },
   "src/traust_engine/locations.py": {
     "contracts": 1,
-    "state-file": 4
+    "state-file": 1
   },
   "src/traust_engine/ops/admission.py": {
     "core-internal": 2
@@ -36,9 +33,6 @@
   },
   "src/traust_engine/ops/pack.py": {
     "core-internal": 1
-  },
-  "src/traust_engine/portfolio/graph.py": {
-    "database": 1
   },
   "src/traust_engine/sweep/engine.py": {
     "contracts": 1

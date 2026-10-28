@@ -4,7 +4,7 @@ Holds the injected context and the fail-loud location resolvers every namespace
 needs. The resolution logic itself lives in :mod:`traust_engine.locations`; this
 just binds it to ``self._ctx.locations`` so no namespace re-derives it.
 
-PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
+PENDING(decision: sweep stages) — kept for traust;
 deleted when traust retires or ports it.
 """
 

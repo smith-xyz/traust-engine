@@ -15,10 +15,9 @@ tagged `PENDING(decision: …)`); deleted when traust retires or ports it:
 
 | Module | Kept for |
 |---|---|
-| `traust_engine.engine` | `HarnessEngine` facade: `.adapters`, `.sweep`, `.portfolio` |
+| `traust_engine.engine` | `HarnessEngine` facade: `.adapters`, `.sweep` |
 | `traust_engine.sweep` | sweep stages: collect, draft, sweep, emit, benchmark, rule lane, mining, calibration |
-| `traust_engine.portfolio` | portfolio graph layers |
-| `traust_engine.adapters` | opengrep (sweep stages) and checkov (portfolio graph) |
+| `traust_engine.adapters` | opengrep (sweep stages) |
 | `traust_engine.corpus` | the report population the sweep stages read |
 
 The opengrep rule pack ships under `data/secure-code-audit/opengrep-rules/`. This library ships **no configuration files and never loads
@@ -92,10 +91,9 @@ holds every config file; edit them there (the AWS/SSH model).
 |---|---|
 | `$TRAUST_CONFIG_HOME` | The one config directory (corpus-config, model-registry, feeds, external-tools, safe-exec profiles, product map, budget policy, rule-pack allowlist, hardening weights, dist-git watch, internal vocabulary, optional signing pubkey). Default `~/.traust/config`; else `DeploymentConfigMissing`. |
 | `locations.yaml` → `workspace` | Workspace root the harness reads repos from |
-| `locations.yaml` → `analysis_results` | Findings-side artifact root (local path or `file://`/`s3://`… URI) |
+| `locations.yaml` → `analysis_results` | Findings-side artifact root (local path or `file://` URI) |
 | `locations.yaml` → `progress_tracker` | Metrics journal + dashboard output root |
 | `locations.yaml` → `feeds_cache` | Feed cache directory |
-| `locations.yaml` → `portfolio_graph` | Portfolio graph DB (defaults under `analysis_results`) |
 | `locations.yaml` → `opengrep_rules` | Opengrep rule pack dir (overrides the bundled default) |
 
 Secrets and OS/tool standards stay environment-driven (`GITHUB_TOKEN`, signing key

@@ -11,9 +11,9 @@ it needs, with no dependency on the app:
     h.sweep.collect(...)
 
 Namespaces mirror the engine's submodules: `.adapters` (the rule-lane stage's opengrep
-config), `.sweep`, `.portfolio`.
+config), `.sweep`.
 
-PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
+PENDING(decision: sweep stages) — kept for traust;
 deleted when traust retires or ports it.
 """
 
@@ -25,7 +25,6 @@ from pathlib import Path
 from traust_contracts import HarnessContext, load_context
 
 from traust_engine.adapters.ops import AdaptersOps
-from traust_engine.portfolio.ops import PortfolioOps
 from traust_engine.sweep.ops import SweepOps
 
 
@@ -49,7 +48,3 @@ class HarnessEngine:
     @cached_property
     def sweep(self) -> SweepOps:
         return SweepOps(self._ctx)
-
-    @cached_property
-    def portfolio(self) -> PortfolioOps:
-        return PortfolioOps(self._ctx)

@@ -32,7 +32,6 @@ def test_namespace_ops_are_cached_per_engine(tmp_path):
     h = HarnessEngine.load(config_home=_home_with_progress_tracker(tmp_path, tmp_path / "pt"))
     assert h.adapters is h.adapters
     assert h.sweep is h.sweep
-    assert h.portfolio is h.portfolio
 
 
 def test_sweep_paths_follow_configured_locations(tmp_path):
@@ -74,37 +73,3 @@ def test_adapters_ops_expose_context_config(tmp_path):
 
     packs = load_supplemental_packs(allowlist=allowlist)
     assert any(p["name"] == "argus-observe-rules" for p in packs)
-
-
-def test_portfolio_ops_use_configured_paths(tmp_path):
-    ar = tmp_path / "analysis-results"
-    (ar / "graph").mkdir(parents=True)
-    spine_path = ar / "graph" / "repo-graph.json"
-    spine_path.write_text('{"nodes":[],"edges":[]}', encoding="utf-8")
-    explicit_db = tmp_path / "custom" / "portfolio.db"
-    explicit_db.parent.mkdir()
-
-    home = _home_with_progress_tracker(tmp_path, tmp_path / "pt")
-    (home / "locations.yaml").write_text(
-        yaml.safe_dump({"progress_tracker": str(tmp_path / "pt"), "analysis_results": str(ar)}),
-        encoding="utf-8",
-    )
-    h = HarnessEngine.load(config_home=home)
-
-    assert h.portfolio.repo_graph() == spine_path
-    assert h.portfolio.portfolio_graph_db() == ar / "graph" / "portfolio-graph.db"
-    assert h.portfolio.portfolio_graph_location() == str(ar / "graph" / "portfolio-graph.db")
-
-    (home / "locations.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "progress_tracker": str(tmp_path / "pt"),
-                "analysis_results": str(ar),
-                "portfolio_graph": str(explicit_db),
-            }
-        ),
-        encoding="utf-8",
-    )
-    h2 = HarnessEngine.load(config_home=home)
-    assert h2.portfolio.portfolio_graph_db() == explicit_db
-    assert h2.portfolio.portfolio_graph_location() == str(explicit_db)
