@@ -108,12 +108,12 @@ All notable changes to traust-engine are documented here.
 - **Fixed: `go.mod` `replace` directives were ignored** by the dependency
   pre-scan; the shared `parse_gomod` doesn't read them.
   - **A require replaced with a directory in the checkout**
-    (`go.etcd.io/etcd/server/v3 => ./server`) is the project's own
-    module. It is no longer looked up as a published package. On etcd
-    that removes 3 false positives and 45 such requires.
+    (`example.com/project/server => ./server`) is the project's own
+    module. It is no longer looked up as a published package. On one real
+    Go checkout that removes 3 false positives and 45 such requires.
   - **A require replaced with another module or version** queries what
     actually builds: `github.com/old/lib => github.com/fork/lib v1.2.5`,
-    or ARO-RP's 22 version pins such as
+    or a checkout's version pins such as
     `k8s.io/api => k8s.io/api v0.29.15`.
   - Version-specific replaces apply only to the version they name. The
     module's own path is never a dependency.
@@ -135,8 +135,8 @@ All notable changes to traust-engine are documented here.
   - A candidate carries `dependency_scope: test` or `dev` only when
     **every** path to it is test or dev. A runtime path removes the tag,
     so an untagged candidate means runtime or unknown.
-  - On keycloak, 114 of 203 deps.dev-resolved candidates are `test`
-    (JMeter, ApacheDS, Arquillian trees) and 13 more are `dev`.
+  - On one real Java checkout, 114 of 203 deps.dev-resolved candidates are
+    `test` and 13 more are `dev`.
 
 ## [0.36.0]
 
@@ -221,7 +221,7 @@ All notable changes to traust-engine are documented here.
     python3.11-setuptools RPMs installed.
   - **Air-gapped:** `write_cyclonedx` and `run_offline` give the filtered
     packages to osv-scanner offline (`-L <file>.cdx.json --offline`), and
-    `parse_offline` restores the image paths. On external-secrets v0.9.0
+    `parse_offline` restores the image paths. On one real container image
     this matched the API exactly (205/205).
 - **`lookup` candidates carry `upstream`**: Red Hat OSV records list
   their CVEs there, not in `aliases`.
