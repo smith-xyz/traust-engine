@@ -17,24 +17,10 @@ dependencies = [
 traust-engine = "traust_engine.ops.cli:main"
 
 [project.optional-dependencies]
-graph = [
-    "tree-sitter",
-    "tree-sitter-go",
-    "tree-sitter-python",
-    "tree-sitter-typescript",
-    "tree-sitter-javascript",
-]
 signing = ["sigstore>=4.0,<5.0"]
-# Object-store locations for ANALYSIS_RESULTS_URI / PORTFOLIO_GRAPH_URI.
-# Optional on purpose: a local path or file:// imports none of this, so an
-# operator workstation acquires no dependency for a deployment feature.
-# Install the driver for the store you use alongside it (s3fs, gcsfs, adlfs).
-remote = ["fsspec>=2024.2"]
-s3 = ["fsspec>=2024.2", "s3fs>=2024.2"]
-gcs = ["fsspec>=2024.2", "gcsfs>=2024.2"]
 
 [dependency-groups]
-dev = ["fsspec>=2024.2", "pytest>=9.1.1", "pytest-xdist>=3", "ruff>=0.6", "vulture>=2.16"]
+dev = ["pytest>=9.1.1", "pytest-xdist>=3", "ruff>=0.6", "vulture>=2.16"]
 
 [tool.uv.sources]
 traust-core = { git = "https://github.com/traust-security/traust-core.git", rev = "2bdc2d6d5435820a934c1094ae1901599710dfd0" }
@@ -55,7 +41,6 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["src/traust_engine/data/secure-code-audit"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]

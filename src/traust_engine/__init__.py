@@ -3,13 +3,8 @@
 Submodules:
     ops         — continuous ops: pack spec, controller (tick), admission, reaper
 
-Kept for traust until its PENDING decisions (sweep stages, portfolio graph
-layers) retire or port them:
-    engine      — the ``HarnessEngine`` facade (adapters, sweep, portfolio)
-    sweep       — class-generalization scan engine
-    portfolio   — source-code dependency graph analysis
-    adapters    — opengrep (sweep stages) and checkov (portfolio graph)
-    corpus      — population resolver the sweep stages read
+Kept for traust until its last ``load_engine`` goes:
+    engine      — the ``HarnessEngine`` facade (no namespaces left)
 """
 
 from traust_engine.assets import harness_version as _harness_version

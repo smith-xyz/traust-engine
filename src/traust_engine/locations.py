@@ -11,7 +11,7 @@ context the caller resolved, so no consumer can silently read a second estate
 below the ops layer. The resolution logic lives here, once; ops pass ``self._loc``
 and never re-derive it.
 
-PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
+PENDING(decision: sweep stages) — kept for traust;
 deleted when traust retires or ports it.
 """
 
@@ -74,19 +74,6 @@ def analysis_results_dir(loc: Locations | None) -> Path | None:
     return local_path(analysis_results_location(loc))
 
 
-def portfolio_graph_location(loc: Locations | None) -> str | None:
-    """``locations.portfolio_graph`` when set, else
-    ``<analysis-results>/graph/portfolio-graph.db``, else None."""
-    if loc and loc.portfolio_graph:
-        return loc.portfolio_graph
-    base = analysis_results_location(loc)
-    if not base:
-        return None
-    from traust_engine import storage
-
-    return storage.join(base, "graph", "portfolio-graph.db")
-
-
 def workspace_dir(loc: Locations | None) -> Path:
     """Workspace root, from ``locations.workspace``. FAILS LOUD when unconfigured
     — no cwd fallback that would write a stray tree wherever the process started."""
@@ -133,8 +120,6 @@ def sarif_tool_uri(loc: Locations | None) -> str | None:
 
 FINDINGS_REL = Path("findings")
 FINDINGS_DB_REL = Path("graph") / "findings.db"
-REPO_GRAPH_REL = Path("graph") / "repo-graph.json"
-PORTFOLIO_GRAPH_REL = Path("graph") / "portfolio-graph.db"
 FP_PRECEDENT_CACHE_REL = Path("graph") / "fp-precedent-cache.json"
 COMPLIANCE_REL = Path("compliance")
 SCAN_TESTING_REL = Path("scan-testing")
@@ -163,18 +148,6 @@ def _under_results(rel: Path, loc: Locations | None) -> Path | None:
 def findings_db(loc: Locations | None) -> Path | None:
     """``<analysis-results>/graph/findings.db``, or None."""
     return _under_results(FINDINGS_DB_REL, loc)
-
-
-def repo_graph(loc: Locations | None) -> Path | None:
-    """``<analysis-results>/graph/repo-graph.json``, or None."""
-    return _under_results(REPO_GRAPH_REL, loc)
-
-
-def portfolio_graph_db(loc: Locations | None) -> Path | None:
-    """``locations.portfolio_graph`` (local Path form) when set, else
-    ``<analysis-results>/graph/portfolio-graph.db``, or None. Honors the explicit
-    override, unlike a bare ``analysis_results`` join."""
-    return local_path(portfolio_graph_location(loc))
 
 
 def fp_precedent_cache(loc: Locations | None) -> Path | None:

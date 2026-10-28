@@ -1,32 +1,11 @@
-"""HarnessEngine — the client for the processing core.
-
-Construct once from the loaded config context (or an explicit one), then call
-namespaced operations. The engine only ever *receives* its context; it never
-reaches for config itself. It runs standalone — contracts + a config home is all
-it needs, with no dependency on the app:
-
-    from traust_engine import HarnessEngine
-
-    h = HarnessEngine(ctx)                       # explicit context (tests, app)
-    h.sweep.collect(...)
-
-Namespaces mirror the engine's submodules: `.adapters` (the rule-lane stage's opengrep
-config), `.sweep`, `.portfolio`.
-
-PENDING(decision: sweep stages | portfolio graph layers) — kept for traust;
-deleted when traust retires or ports it.
-"""
+"""HarnessEngine — the facade traust's `load_engine` still builds. Its namespaces moved to
+traust-core with the sweep stages and the portfolio graph; it goes with the last caller."""
 
 from __future__ import annotations
 
-from functools import cached_property
 from pathlib import Path
 
 from traust_contracts import HarnessContext, load_context
-
-from traust_engine.adapters.ops import AdaptersOps
-from traust_engine.portfolio.ops import PortfolioOps
-from traust_engine.sweep.ops import SweepOps
 
 
 class HarnessEngine:
@@ -41,15 +20,3 @@ class HarnessEngine:
     @property
     def ctx(self) -> HarnessContext:
         return self._ctx
-
-    @cached_property
-    def adapters(self) -> AdaptersOps:
-        return AdaptersOps(self._ctx)
-
-    @cached_property
-    def sweep(self) -> SweepOps:
-        return SweepOps(self._ctx)
-
-    @cached_property
-    def portfolio(self) -> PortfolioOps:
-        return PortfolioOps(self._ctx)
