@@ -7,13 +7,11 @@ from typing import Generic, TypeVar
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from traust_core.v1.context.context import Services
+from traust_core.v1.context import Clock, Router, Services
 from traust_core.v1.models.base import Model
 from traust_core.v1.models.common import every_item
 from traust_core.v1.models.inventory import RecordedRelease, RepositoryFilter
 from traust_core.v1.models.operations import OrderRequest
-from traust_core.v1.providers.clock import Clock
-from traust_core.v1.services.operations import Router
 
 from traust_engine.ops.admission import Admission, AdmissionReport
 from traust_engine.ops.controller import Controller, TickReport

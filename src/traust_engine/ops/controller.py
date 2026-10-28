@@ -10,6 +10,7 @@ from typing import Generic, Protocol, TypeVar
 from uuid import UUID
 
 import pydantic
+from traust_core.v1.context import Clock, FeedQuery, OpsService, Router
 from traust_core.v1.errors import ConfigError, NotFoundError
 from traust_core.v1.models.base import Model
 from traust_core.v1.models.common import Cursor, PageRequest, encode_cursor
@@ -25,8 +26,6 @@ from traust_core.v1.models.operations import (
     Refusal,
 )
 from traust_core.v1.models.vocabulary import ActorKind
-from traust_core.v1.providers.clock import Clock
-from traust_core.v1.services.operations import FeedQuery, OpsService, Router
 
 from traust_engine.ops.pack import Pack
 

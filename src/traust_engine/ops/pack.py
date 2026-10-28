@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 import pydantic
 import yaml
-from traust_core.v1 import contracts
+from traust_core.v1.context import validate_config
 from traust_core.v1.errors import ConfigError, DocumentError
 from traust_core.v1.models.base import Dto
 from traust_core.v1.models.common import Sha256
@@ -146,7 +146,7 @@ class Pack(Dto):
         try:
             data = path.read_bytes()
             raw = yaml.safe_load(data)
-            contracts.validate_config("pack", raw)
+            validate_config("pack", raw)
             return cls.model_validate(raw).model_copy(
                 update={"digest": sha256_hex(data), "pins": pinned}
             )
