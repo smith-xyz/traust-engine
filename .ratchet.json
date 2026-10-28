@@ -1,12 +1,1 @@
-{
-  "src/traust_engine/_ops_base.py": {
-    "contracts": 1
-  },
-  "src/traust_engine/engine.py": {
-    "contracts": 1
-  },
-  "src/traust_engine/locations.py": {
-    "contracts": 1,
-    "state-file": 1
-  }
-}
+{}

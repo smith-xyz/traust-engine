@@ -10,19 +10,13 @@ persistence, tools and reporting belong to traust-core. Import as `traust_engine
 |---|---|
 | `traust_engine.ops` | Continuous ops: `Pack` (the pack's `assets.yaml`, checked against contracts `config/v1/pack`), the tick, admission and the reaper (`EngineLoop.run_once`), all through traust-core services |
 
-Kept for traust until its last `load_engine` goes: `traust_engine.engine`, the
-`HarnessEngine` facade (its namespaces moved to traust-core).
-
-This library ships **no configuration files and never loads
-config itself — it is a pure consumer.** A caller builds the context once
-(`traust_contracts.load_context()`, done for you by
-`HarnessEngine.load(config_home=…)`) and the engine receives it *injected*;
-stateless functions take already-resolved arguments. No
-environment overrides, no cwd or workspace-shaped guessing; a required-but-absent
-file fails closed with `DeploymentConfigMissing` at the entry point. The config
-ownership model (contract / resolution / consumer) is documented in
-`traust/docs/architecture.md` → *Configuration & context*; the runtime paths this
-engine reads from `locations.yaml` are in *Runtime configuration* below.
+This library ships **no configuration files and never loads config itself.**
+The service entry point (`traust-engine run|shadow|record|diff|claim --core <core.yaml>
+--pack <assets.yaml>`) builds traust-core's `Context` once from the files it is given and
+passes core's services in; everything below it takes already-resolved arguments. Config
+resolution (`$TRAUST_CONFIG_HOME`, `locations.yaml`) belongs to traust-core's `Context`.
+The engine imports only traust-core's public API: `traust_core.v1.context`, `models` and
+`errors` (the consumer ratchet in CI holds it there).
 
 ## Install
 
@@ -34,21 +28,17 @@ uv add "traust-engine @ git+ssh://git@<your-forge>/<namespace>/traust-engine.git
 
 Consumers pin library dependencies by commit, not release tag — a tag
 needs a release cut first, a `rev` doesn't, which is what lets the
-dependency chain (contracts to ledger to engine to downstream) propagate
+dependency chain (traust-core to engine) propagate
 PR-to-PR instead of waiting on a tag at every hop:
 
 ```toml
 [project]
 dependencies = [
     "traust-engine",
-    "traust-ledger",
-    "traust-contracts",
 ]
 
 [tool.uv.sources]
 traust-engine = { git = "git@<your-forge>:<namespace>/traust-engine.git", rev = "<commit-sha>" }
-traust-ledger = { git = "git@<your-forge>:<namespace>/traust-ledger.git", rev = "<commit-sha>" }
-traust-contracts = { git = "git@<your-forge>:<namespace>/traust-contracts.git", rev = "<commit-sha>" }
 ```
 
 Note `dependencies` carries bare names, no `>=` floor — the `rev` above is
@@ -67,32 +57,12 @@ ships user-facing changes, run `make bump patch|minor|major`, add a
 CI `release:check-mr`). On merge to `main`, CI tags when `VERSION` is ahead of
 the latest tag.
 
-## Optional extras
-
-```bash
-uv sync --extra graph --extra signing
-```
-
 ## Runtime configuration
 
-Runtime configuration is **config-owned** — there are no environment overrides for
-deployment values. One directory, `$TRAUST_CONFIG_HOME` (default `~/.traust/config`),
-holds every config file; edit them there (the AWS/SSH model).
-
-| Config | Purpose |
-|---|---|
-| `$TRAUST_CONFIG_HOME` | The one config directory (corpus-config, model-registry, feeds, external-tools, safe-exec profiles, product map, budget policy, rule-pack allowlist, hardening weights, dist-git watch, internal vocabulary, optional signing pubkey). Default `~/.traust/config`; else `DeploymentConfigMissing`. |
-| `locations.yaml` → `workspace` | Workspace root the harness reads repos from |
-| `locations.yaml` → `analysis_results` | Findings-side artifact root (local path or `file://` URI) |
-| `locations.yaml` → `progress_tracker` | Metrics journal + dashboard output root |
-| `locations.yaml` → `feeds_cache` | Feed cache directory |
-
-Secrets and OS/tool standards stay environment-driven (`GITHUB_TOKEN`, signing key
-material, `XDG_*`, `JAVA_OPTS`).
-
-No config ships in the wheel. Templates for every operational file live in the
-harness repo as `config/*.example.*`; `install_traust` copies them into
-`$TRAUST_CONFIG_HOME`.
+Everything the service needs comes from its arguments: `--core` (traust-core's
+`core.yaml`, whose home holds `locations.yaml` and the rest of the deployment config),
+`--pack` (the pack's `assets.yaml`), and optionally `--pin`, `--feeds` and `--models`.
+Templates for every operational file live in the traust repo as `config/*.example.*`.
 
 ## Development
 
@@ -109,13 +79,12 @@ Manual equivalents:
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest -m "not integration" -q   # unit tests (no external binaries)
-uv run pytest -q                        # full suite; integration skips when opengrep is absent
+uv run pytest -q
 uv build
 ```
 
-Tests use minimal scanner fixtures under `tests/fixtures/` — no sibling
-`traust` checkout required.
+Tests use minimal fixtures under `tests/fixtures/` (an estate-neutral config
+home and a pack) — no sibling `traust` checkout required.
 
 ## License
 

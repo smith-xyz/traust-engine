@@ -16,9 +16,6 @@ dependencies = [
 [project.scripts]
 traust-engine = "traust_engine.ops.cli:main"
 
-[project.optional-dependencies]
-signing = ["sigstore>=4.0,<5.0"]
-
 [dependency-groups]
 dev = ["pytest>=9.1.1", "pytest-xdist>=3", "ruff>=0.6", "vulture>=2.16"]
 
@@ -35,7 +32,6 @@ exclude = ["/.ci-venv", "/.venv"]
 testpaths = ["tests"]
 markers = [
     "integration: tests requiring external binaries (opengrep) on PATH",
-    "requires_git: test creates git repos in tmp dirs (skipped when git init is blocked)",
 ]
 
 [tool.ruff]
