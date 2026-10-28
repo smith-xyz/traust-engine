@@ -25,18 +25,6 @@
     "contracts": 1,
     "state-file": 4
   },
-  "src/traust_engine/ops/admission.py": {
-    "core-internal": 2
-  },
-  "src/traust_engine/ops/controller.py": {
-    "core-internal": 2
-  },
-  "src/traust_engine/ops/loop.py": {
-    "core-internal": 2
-  },
-  "src/traust_engine/ops/pack.py": {
-    "core-internal": 1
-  },
   "src/traust_engine/portfolio/graph.py": {
     "database": 1
   },
