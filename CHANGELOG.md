@@ -2,6 +2,12 @@
 
 All notable changes to traust-engine are documented here.
 
+## [0.39.4]
+
+- Leave benchmark worklist validity unanswered instead of emitting the deprecated
+  `not_verified` label. Planned claims and validation inputs are unchanged; no
+  confirmation, refutation or evidence grade is inferred.
+
 ## [0.39.3]
 
 - Preserve supplied finding remediation effort and independent external

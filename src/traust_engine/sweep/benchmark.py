@@ -96,7 +96,6 @@ def cmd_plan(args, *, results_dir: Path) -> int:
                     f"Hints: {fx['controls_hint']}"
                 ),
                 "locations": [{"path": f"benchmark/fixtures/{fx['vuln_manifest']}"}],
-                "validation_status": "not_verified",
             }
         )
     doc = {
