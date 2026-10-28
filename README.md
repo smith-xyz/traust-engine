@@ -10,22 +10,14 @@ persistence, tools and reporting belong to traust-core. Import as `traust_engine
 |---|---|
 | `traust_engine.ops` | Continuous ops: `Pack` (the pack's `assets.yaml`, checked against contracts `config/v1/pack`), the tick, admission and the reaper (`EngineLoop.run_once`), all through traust-core services |
 
-Kept for traust until Shaun's retire-or-port decisions land (each package is
-tagged `PENDING(decision: …)`); deleted when traust retires or ports it:
+Kept for traust until its last `load_engine` goes: `traust_engine.engine`, the
+`HarnessEngine` facade (its namespaces moved to traust-core).
 
-| Module | Kept for |
-|---|---|
-| `traust_engine.engine` | `HarnessEngine` facade: `.adapters`, `.sweep` |
-| `traust_engine.sweep` | sweep stages: collect, draft, sweep, emit, benchmark, rule lane, mining, calibration |
-| `traust_engine.adapters` | opengrep (sweep stages) |
-| `traust_engine.corpus` | the report population the sweep stages read |
-
-The opengrep rule pack ships under `data/secure-code-audit/opengrep-rules/`. This library ships **no configuration files and never loads
+This library ships **no configuration files and never loads
 config itself — it is a pure consumer.** A caller builds the context once
 (`traust_contracts.load_context()`, done for you by
-`HarnessEngine.load(config_home=…)`) and the engine receives it *injected*: the
-ops namespaces (`h.sweep`, `h.adapters`, …) hold the frozen `HarnessContext` and
-derive paths from it; stateless functions take already-resolved arguments. No
+`HarnessEngine.load(config_home=…)`) and the engine receives it *injected*;
+stateless functions take already-resolved arguments. No
 environment overrides, no cwd or workspace-shaped guessing; a required-but-absent
 file fails closed with `DeploymentConfigMissing` at the entry point. The config
 ownership model (contract / resolution / consumer) is documented in
@@ -94,7 +86,6 @@ holds every config file; edit them there (the AWS/SSH model).
 | `locations.yaml` → `analysis_results` | Findings-side artifact root (local path or `file://` URI) |
 | `locations.yaml` → `progress_tracker` | Metrics journal + dashboard output root |
 | `locations.yaml` → `feeds_cache` | Feed cache directory |
-| `locations.yaml` → `opengrep_rules` | Opengrep rule pack dir (overrides the bundled default) |
 
 Secrets and OS/tool standards stay environment-driven (`GITHUB_TOKEN`, signing key
 material, `XDG_*`, `JAVA_OPTS`).

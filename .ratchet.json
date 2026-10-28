@@ -2,19 +2,6 @@
   "src/traust_engine/_ops_base.py": {
     "contracts": 1
   },
-  "src/traust_engine/adapters/_contract_bridge.py": {
-    "contracts": 2
-  },
-  "src/traust_engine/adapters/opengrep.py": {
-    "contracts": 2
-  },
-  "src/traust_engine/adapters/ops.py": {
-    "contracts": 1
-  },
-  "src/traust_engine/corpus/resolver.py": {
-    "contracts": 2,
-    "state-file": 2
-  },
   "src/traust_engine/engine.py": {
     "contracts": 1
   },
@@ -33,14 +20,5 @@
   },
   "src/traust_engine/ops/pack.py": {
     "core-internal": 1
-  },
-  "src/traust_engine/sweep/engine.py": {
-    "contracts": 1
-  },
-  "src/traust_engine/sweep/mining.py": {
-    "state-file": 2
-  },
-  "src/traust_engine/sweep/rule_lane.py": {
-    "contracts": 1
   }
 }

@@ -6,7 +6,7 @@ Python 3.11+ library (`traust_engine`).
 - **Lint:** line length 100; ruff E/W/F/I/UP/B/SIM/PTH/RUF (`pyproject.toml`) — `Path` not `os.path`, no bare `except: pass`
 - **Commits:** conventional `type(scope): subject` (`feat`, `fix`, `perf`, `chore`, `ci`, …)
 - **Releases:** `feat`/`fix`/`perf`/breaking MRs need `make check-release`, `VERSION` + `CHANGELOG.md` bump
-- **Scope:** smallest diff; match existing style; skip `data/secure-code-audit/` unless asked
+- **Scope:** smallest diff; match existing style
 - **Downstream pin:** `traust` carries a direct `[tool.uv.sources]` pin on
   this repo (`rev = "<sha>"`, not a tag). After merging here, bump the pin
   to the new commit there, `uv lock`, and run its tests before opening the PR.

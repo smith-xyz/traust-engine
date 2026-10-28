@@ -67,24 +67,3 @@ def test_opengrep_rules_dir_reads_config():
         "/estate/rules"
     )
     assert cfg.opengrep_rules_dir(None) is None
-
-
-def test_resolve_rule_pack_dir_uses_locations(tmp_path):
-    from traust_engine.adapters.opengrep import resolve_rule_pack_dir
-
-    configured = tmp_path / "from-locations"
-    configured.mkdir()
-    assert resolve_rule_pack_dir(loc=Locations(opengrep_rules=str(configured))) == configured
-
-
-def test_resolve_rule_pack_dir_rejects_remote_uri():
-    from traust_engine.adapters.opengrep import resolve_rule_pack_dir
-
-    with pytest.raises(ValueError, match="no local path form"):
-        resolve_rule_pack_dir(loc=Locations(opengrep_rules="s3://bucket/rules"))
-
-
-def test_bundled_defaults_exist_on_disk():
-    from traust_engine.assets import default_rule_pack_dir
-
-    assert default_rule_pack_dir().is_dir()
