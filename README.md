@@ -18,6 +18,10 @@ resolution (`$TRAUST_CONFIG_HOME`, `locations.yaml`) belongs to traust-core's `C
 The engine imports only traust-core's public API: `traust_core.v1.context`, `models` and
 `errors` (the consumer ratchet in CI holds it there).
 
+Command templates can use `{worker}` alongside `{run_id}`, `{repo_url}`, `{role}` and
+`{rule}`. `{worker}` is the claiming runner's ID, so artifact-only session commands can
+record their audit evidence under the same lease; claim, heartbeat and completion are unchanged.
+
 ## Install
 
 Private Git (after tags are published):
