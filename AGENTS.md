@@ -8,9 +8,6 @@ Python 3.11+ library (`traust_engine`).
 - **Releases:** `feat`/`fix`/`perf`/breaking MRs need `make check-release`, `VERSION` + `CHANGELOG.md` bump
 - **Scope:** smallest diff; match existing style
 - **Downstream:** no repo pins this one; traust depends on traust-core only.
-- **Merging:** `development` requires no approvals - the checks gate it. Arm
-  auto-merge instead of waiting on a click: apply the `automerge` label, or tick
-  the test checkbox in the PR body; `.github/workflows/auto-merge.yml` then runs
-  `gh pr merge --auto --merge` and the PR lands when the checks pass. Merge
-  commits only - downstream pins point at them.
+- **Merging:** `development` requires no approvals - the checks gate it; merge
+  once the checks are green. Merge commits only - downstream pins point at them.
 - **Setup:** `make setup` once per clone (hooks). More: [CONTRIBUTING.md](CONTRIBUTING.md), [README.md](README.md)
