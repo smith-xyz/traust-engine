@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from traust_core.v1.errors import ConfigError
-from traust_core.v1.models.operations import LaneName
+from traust_core.v1.models.operations import LaneName, Requirement
 
 from traust_engine.ops.admission import TokenBucket
 from traust_engine.ops.pack import Pack
@@ -104,6 +104,24 @@ def test_a_token_bucket_spends_then_refills_up_to_an_hours_worth() -> None:
 def test_a_missing_pin_file_is_a_config_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"pinned config .*external-tools\.yaml"):
         Pack.load(PACK, tmp_path / "external-tools.yaml")
+
+
+def test_an_enabled_asset_without_run_or_model_role_is_a_pack_error(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="enabled: false is the exemption"):
+        Pack.load(_write(tmp_path, "pack: p\nassets:\n  a: {trigger: {every: 24h}}\n"))
+
+
+def test_a_disabled_asset_is_exempt_from_its_requirements(tmp_path: Path) -> None:
+    pack = Pack.load(
+        _write(
+            tmp_path,
+            "pack: p\n"
+            "assets:\n"
+            "  a: {run: [x], trigger: {every: 24h}}\n"
+            "  b: {enabled: false, requires: {facts: [sla-policy]}}\n",
+        )
+    )
+    assert pack.requirements() == (Requirement(),)
 
 
 def test_a_pack_built_in_code_records_no_config() -> None:

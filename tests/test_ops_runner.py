@@ -87,6 +87,12 @@ def test_only_command_assets_are_runnable() -> None:
     assert "dependency_graph" not in runnable(pack)  # a skill session: a launcher's job
 
 
+def test_a_disabled_asset_is_not_claimable() -> None:
+    raw = yaml.safe_load(PACK.read_text())
+    raw["assets"]["diff_scan"]["enabled"] = False
+    assert "diff_scan" not in runnable(Pack.model_validate(raw))
+
+
 @pytest.mark.parametrize(
     ("stdout", "code", "state", "reason"),
     [
