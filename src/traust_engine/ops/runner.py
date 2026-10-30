@@ -130,7 +130,7 @@ class Runner:
         """What the order supplies: its id, the asset's model role, the rule that routed it, and
         its repository's URL for a per-repository asset. NEED(model: order params): typed params
         beyond the repository have no column yet."""
-        values = {"run_id": str(order.id)}
+        values = {"run_id": str(order.id), "worker": str(self._worker)}
         if spec.model is not None:
             values["role"] = spec.model.role
         if order.rule is not None:

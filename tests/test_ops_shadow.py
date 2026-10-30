@@ -169,7 +169,10 @@ def _done(code: int, stdout: str = "") -> subprocess.CompletedProcess[str]:
     ("done", "want"),
     [
         (_done(4, JobResult.partly({"kev": 1}).model_dump_json()), JobResult.partly({"kev": 1})),
-        (_done(5, "log\n" + JobResult.refused("x").model_dump_json()), JobResult.refused("x")),
+        (
+            _done(5, "log\n" + JobResult.refused(OrderReason.NOT_FOUND).model_dump_json()),
+            JobResult.refused(OrderReason.NOT_FOUND),
+        ),
         (_done(0, "done"), JobResult.succeeded()),
         (_done(0), JobResult.succeeded()),
         (_done(3, "{not json"), JobResult.failed(OrderReason.RUNNER_CRASHED)),
