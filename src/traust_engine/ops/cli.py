@@ -134,7 +134,7 @@ def _diff(args: argparse.Namespace, core: Context, pack: Pack) -> int:
     if args.routes:
         raw = json.loads(args.routes.read_text(encoding="utf-8"))
         rows = raw.get("decisions", []) if isinstance(raw, dict) else raw
-        lanes = (lane for a in pack.assets.values() for lane in a.trigger.lanes)
+        lanes = iter(pack.lanes)
         same, different = compare_routes(ticks, rows, repository_urls(services), lanes)
     report = Diff(
         since=since,

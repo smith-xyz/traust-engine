@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ SESSION = {"model": {"role": "graph"}, "trigger": {"every": "24h"}}
 def _core(tmp_path: Path) -> Path:
     path = tmp_path / "core.yaml"
     path.write_text(yaml.safe_dump({"home": str(tmp_path / "store")}))
+    shutil.copytree(Path(__file__).parent / "fixtures" / "config", tmp_path, dirs_exist_ok=True)
     return path
 
 

@@ -99,6 +99,12 @@ class Pack(Dto):
     pack: str
     route_on: AssetName | None = None
     assets: dict[AssetName, AssetSpec]
+
+    @property
+    def lanes(self) -> tuple[LaneName, ...]:
+        """The lanes the pack actually runs: an enabled asset's, never a disabled one's."""
+        return tuple(lane for a in self.assets.values() if a.enabled for lane in a.trigger.lanes)
+
     digest: Sha256 | None = None  # sha256 of the file's bytes, set by `load`: the pack version
     pins: tuple[ConfigDigest, ...] = ()
 
@@ -116,6 +122,21 @@ class Pack(Dto):
             raise ValueError(
                 f"assets with neither run nor model.role: {unmade} -- no runner can make them "
                 "(enabled: false is the exemption)"
+            )
+        if self.route_on is not None and not self.assets[self.route_on].enabled:
+            raise ValueError(f"route_on {self.route_on!r} is disabled: routing would never run")
+        if stalled := sorted(
+            {
+                d
+                for a in self.assets.values()
+                if a.enabled
+                for d in a.deps
+                if not self.assets[d].enabled
+            }
+        ):
+            raise ValueError(
+                f"enabled assets depend on disabled ones: {stalled} -- the dependents are "
+                "withheld upstream-stale every window; enable the dependency or the dependent"
             )
         if self.route_on is not None and (
             self.route_on not in names or self.assets[self.route_on].trigger.every is None

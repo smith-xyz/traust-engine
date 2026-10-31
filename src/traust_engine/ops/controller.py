@@ -175,6 +175,7 @@ class Controller(Generic[S]):
         source = self._pack.route_on
         if self._router is None or self._state_of is None or source is None:
             return [], 0, 0, 0
+        before = self._cursor
         changed, refusals, releases = self._changes(source, now)
         requests: list[OrderRequest] = []
         unknown: set[LaneName] = set()
@@ -213,6 +214,7 @@ class Controller(Generic[S]):
                     )
             routed += 1
         if unknown:
+            self._cursor = before
             raise ConfigError(
                 f"pack {self._pack.pack} runs no asset for lane(s) {', '.join(sorted(unknown))}: "
                 "give each lane an asset (trigger.lanes), or fix the router"

@@ -551,6 +551,9 @@ def test_a_disabled_asset_is_not_planned_or_reported(tmp_path: Path) -> None:
         "freshness": {"fail": "48h"},
         "requires": {"facts": ["sla-policy"]},
     }
+    raw.pop("route_on")
+    raw["assets"]["dependency_graph"]["enabled"] = False
+    raw["assets"]["diff_scan"]["enabled"] = False
     path = tmp_path / "assets.yaml"
     path.write_text(yaml.safe_dump(raw))
     clock = Clock()
@@ -800,3 +803,23 @@ def test_a_restart_does_not_replay_releases_routed_before_it(tmp_path: Path) -> 
     router.releases.clear()
     restarted = EngineLoop(services, clock, Pack.load(PACK), router, state_of=lambda r: r)
     assert restarted.run_once().tick.routed == 0 and router.releases == {}
+
+
+def test_a_corrected_router_retry_reads_the_events_it_failed_on(tmp_path: Path) -> None:
+    """The failed pass puts the feed cursor back, so a corrected router on the same loop
+    routes the repositories the failed pass read (it does not skip past their events)."""
+    clock = Clock()
+    services = _context(tmp_path, clock).services()
+    _repositories(services, 1)
+    loop = EngineLoop(
+        services, clock, Pack.load(PACK), TableAndAdditiveRouter(), state_of=lambda r: r
+    )
+    loop.run_once()
+    clock.at += timedelta(minutes=10)
+    _drain(services)
+    with pytest.raises(ConfigError, match="runs no asset for lane"):
+        loop.run_once()
+    loop._controller._router = LaneRouter(frozenset())
+    report = loop.run_once()
+    assert report.tick.routed == 1
+    assert _routed_orders(services)

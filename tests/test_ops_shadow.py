@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -193,6 +194,7 @@ class EveryRepoToDiffScan:
 def core(tmp_path: Path) -> Path:
     path = tmp_path / "core.yaml"
     path.write_text(yaml.safe_dump({"home": str(tmp_path / "store")}))
+    shutil.copytree(Path(__file__).parent / "fixtures" / "config", tmp_path, dirs_exist_ok=True)
     return path
 
 
@@ -320,6 +322,22 @@ def test_diff_exits_1_on_a_difference_and_compares_the_routes(core: Path, tmp_pa
     assert report["routes_different"] == [
         {"repository_id": str(repository_id), "url": url, "engine": "diff-scan", "expected": None}
     ]
+
+
+def test_diff_ignores_expected_routes_to_a_disabled_assets_lane(core: Path, tmp_path: Path) -> None:
+    _, url = _repository(core)
+    raw = yaml.safe_load(PACK.read_text())
+    raw["assets"]["diff_scan"]["enabled"] = False
+    pack = tmp_path / "assets.yaml"
+    pack.write_text(yaml.safe_dump(raw))
+    shadow = tmp_path / "shadow.jsonl"
+    shadow.write_text(_tick(datetime.now(UTC) - 3 * HOUR).model_dump_json())
+    routes = tmp_path / "worklist.json"
+    routes.write_text(json.dumps({"decisions": [{"repo_url": url, "lane": "diff-scan"}]}))
+
+    rc, out = _cli(core, "diff", "--shadow", str(shadow), "--routes", str(routes), pack=pack)
+
+    assert rc == 0 and json.loads(out)["routes_different"] == []
 
 
 def test_a_router_that_cannot_be_imported_is_a_config_error(core: Path) -> None:
