@@ -149,20 +149,19 @@ class Runner:
         ops = self._services.ops
         ops.requeue_expired()  # a claim-once runner runs beside no loop: sweep, as `claim` did
         assets = set(runnable(self._pack))
-        open_orders = [
-            order
-            for order in every_item(lambda p: ops.list(OrderFilter(states=OPEN_ORDER_STATES), p))
-            if order.asset in assets
-        ]
+        every_open = list(every_item(lambda p: ops.list(OrderFilter(states=OPEN_ORDER_STATES), p)))
+        open_orders = [order for order in every_open if order.asset in assets]
         queued = sorted(
             (o for o in open_orders if o.state == OrderState.QUEUED),
             key=lambda o: (o.priority, o.created_at, o.id),
         )
         if not queued:
             return None
+        # every open order counts, whatever pack or asset it belongs to: a repository held
+        # by another runner's order is held, not just one this runner could also make
         held = {
             o.repository_id
-            for o in open_orders
+            for o in every_open
             if o.state == OrderState.LEASED
             and o.repository_id is not None
             and o.lease_holder != self._worker

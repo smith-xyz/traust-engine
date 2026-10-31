@@ -426,6 +426,18 @@ def test_every_order_of_a_held_repository_waits(context: Context) -> None:
     assert commands.seen == []
 
 
+def test_a_hold_from_an_asset_the_runner_does_not_make_still_waits(context: Context) -> None:
+    """The hold is the repository's, not the asset's: another pack's leased order for it
+    keeps this runner off its orders too (the mirror lives on the holder's node)."""
+    app = _repository(context)
+    held = _order(context, "dependency_graph", app, priority=0)  # not this runner's asset
+    _order(context, "diff_scan", app, priority=1)
+    _hold(context, held, "a")
+    commands = Commands()
+    assert _runner(context, commands, worker=WorkerId("b")).claim_once() is None
+    assert commands.seen == []
+
+
 @pytest.mark.parametrize(
     ("free", "expected"),
     [("complete", "diff_scan"), ("expire", "repo_state")],
